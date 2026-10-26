@@ -36,11 +36,22 @@ const policyDetailSchema = new mongoose.Schema(
       default: 'Standard Insurance Plan'
     },
 
-    // Category / Line of insurance
+    // Category / Line of insurance (Strictly 10 Enterprise Domains)
     insuranceType: {
       type: String,
-      enum: ['HEALTH', 'AUTO', 'HOME', 'LIFE', 'COMMERCIAL', 'ACCIDENT', 'AGRICULTURE', 'TRAVEL', 'OTHER'],
-      default: 'HEALTH',
+      enum: [
+        'AUTO',
+        'HEALTH',
+        'HOME',
+        'LIFE',
+        'COMMERCIAL',
+        'ACCIDENT',
+        'AGRICULTURE',
+        'TRAVEL',
+        'LIABILITY',
+        'GENERAL'
+      ],
+      default: 'GENERAL',
       index: true
     },
 

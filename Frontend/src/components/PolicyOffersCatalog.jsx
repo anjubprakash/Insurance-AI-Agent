@@ -21,14 +21,16 @@ import EditPolicyOfferModal from './EditPolicyOfferModal.jsx';
 import DeleteConfirmModal from './DeleteConfirmModal.jsx';
 
 const CATEGORIES = [
-  { value: 'ALL', label: 'All Categories' },
-  { value: 'HEALTH', label: 'Health' },
+  { value: '', label: 'All Categories' },
   { value: 'AUTO', label: 'Auto & Motor' },
+  { value: 'HEALTH', label: 'Health' },
   { value: 'HOME', label: 'Home & Property' },
   { value: 'LIFE', label: 'Life' },
+  { value: 'COMMERCIAL', label: 'Commercial' },
   { value: 'ACCIDENT', label: 'Accident' },
   { value: 'AGRICULTURE', label: 'Agriculture' },
-  { value: 'COMMERCIAL', label: 'Commercial' },
+  { value: 'TRAVEL', label: 'Travel' },
+  { value: 'LIABILITY', label: 'Liability' },
   { value: 'GENERAL', label: 'General' }
 ];
 
@@ -38,7 +40,7 @@ export default function PolicyOffersCatalog({ isAdmin, parentDocId = null }) {
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState(null);
   const [searchQuery, setSearchQuery] = useState('');
-  const [selectedCategory, setSelectedCategory] = useState('ALL');
+  const [selectedCategory, setSelectedCategory] = useState('');
   const [editingOffer, setEditingOffer] = useState(null);
   const [offerToDelete, setOfferToDelete] = useState(null);
   const [deletingId, setDeletingId] = useState(null);
@@ -49,7 +51,7 @@ export default function PolicyOffersCatalog({ isAdmin, parentDocId = null }) {
     setError(null);
     try {
       const params = {};
-      if (selectedCategory && selectedCategory !== 'ALL') params.policyCategory = selectedCategory;
+      if (selectedCategory) params.policyCategory = selectedCategory;
       if (searchQuery) params.search = searchQuery;
       if (parentDocId) params.parentDocumentId = parentDocId;
 

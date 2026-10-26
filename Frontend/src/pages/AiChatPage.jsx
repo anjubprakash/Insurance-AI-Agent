@@ -20,8 +20,15 @@ import { getMyPoliciesApi } from '../api/policy.api.js';
 import { useAuth } from '../context/AuthContext.jsx';
 import PlanDetailsModal from '../components/PlanDetailsModal.jsx';
 import { isPlanFavorite, togglePlanFavorite } from '../utils/favorites.js';
+import ChatMessageRenderer from '../components/ChatMessageRenderer.jsx';
 
-export default function AiChatPage() {
+const formatAmount = (val) => {
+  if (!val) return 'Not specified';
+  const str = String(val).trim();
+  return /^\d+(\.\d+)?$/.test(str) ? `£${Number(str).toLocaleString('en-GB')}` : str;
+};
+
+export default function AiChatPage({ initialContext = null, onClearInitialContext = null }) {
   const { user, updateUserSession } = useAuth();
   const [input, setInput] = useState('');
   const [isThinking, setIsThinking] = useState(false);
@@ -163,6 +170,97 @@ export default function AiChatPage() {
     setInput('');
   };
 
+  // Handle incoming navigation context (e.g. from navbar "AI Advisor" or policy card "Talk to Advisor ⚡")
+  useEffect(() => {
+    if (!initialContext) return;
+
+    if (initialContext.targetOffer) {
+      const offer = initialContext.targetOffer;
+      const targetCode = (offer.policyReferenceCode || initialContext.targetPolicyNumber || '').trim();
+      const targetName = (offer.planName || offer.policyName || '').trim();
+      const targetCategory = (offer.policyCategory || offer.insuranceType || '').trim();
+
+      // Check if a dedicated or matching session already exists for this exact policy offer
+      const existingSession = sessions.find((s) => {
+        // 1. Direct code or policy number match
+        if (targetCode) {
+          if (s.targetOfferCode && s.targetOfferCode.toUpperCase() === targetCode.toUpperCase()) return true;
+          if (s.targetPolicyNumber && s.targetPolicyNumber.toUpperCase() === targetCode.toUpperCase()) return true;
+        }
+        // 2. Plan name or title match
+        if (targetName && targetName.length > 3) {
+          const normTarget = targetName.toLowerCase();
+          if (s.targetPlanName && s.targetPlanName.toLowerCase() === normTarget) return true;
+          if (s.title && s.title.toLowerCase() === normTarget) return true;
+          if (s.title && s.title.toLowerCase().includes(normTarget)) return true;
+        }
+        // 3. Search inside session messages
+        if (s.messages && Array.isArray(s.messages)) {
+          if (targetCode && s.messages.some((m) => m.text && m.text.toUpperCase().includes(targetCode.toUpperCase()))) {
+            return true;
+          }
+          if (s.messages.some((m) =>
+            m.savedPolicy && (
+              (targetCode && m.savedPolicy.policyNumber?.toUpperCase() === targetCode.toUpperCase()) ||
+              (targetName && m.savedPolicy.policyName?.toLowerCase() === targetName.toLowerCase())
+            )
+          )) {
+            return true;
+          }
+          if (targetName && targetName.length > 5 && s.messages.some((m) => m.text && m.text.toLowerCase().includes(targetName.toLowerCase()))) {
+            return true;
+          }
+        }
+        return false;
+      });
+
+      if (existingSession) {
+        setActiveSessionId(existingSession.id);
+        // Ensure policy identifier tags are recorded on the session
+        setSessions((prev) =>
+          prev.map((s) =>
+            s.id === existingSession.id
+              ? {
+                  ...s,
+                  targetOfferCode: s.targetOfferCode || targetCode,
+                  targetPolicyNumber: s.targetPolicyNumber || targetCode,
+                  targetPlanName: s.targetPlanName || targetName,
+                  targetOffer: s.targetOffer || offer
+                }
+              : s
+          )
+        );
+      } else {
+        const planSession = {
+          id: `chat_policy_${targetCode || Date.now()}_${Date.now()}`,
+          title: targetName || `Policy #${targetCode}`,
+          targetOfferCode: targetCode,
+          targetPolicyNumber: targetCode,
+          targetPlanName: targetName,
+          targetOffer: offer,
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+          messages: [
+            {
+              sender: 'agent',
+              text: `👋 Hello ${firstName}! I am your dedicated AI Advisor for **${targetName || 'your policy'}** (${offer.insurer || targetCategory || 'Coverage'}).\n\nAsk me anything about this policy's coverage details, waiting periods, claims process, or how to update your details!`,
+              recommendedOffers: []
+            }
+          ]
+        };
+        setSessions((prev) => [planSession, ...prev]);
+        setActiveSessionId(planSession.id);
+      }
+      setActiveSavedPolicy(null);
+      setInput('');
+      onClearInitialContext?.();
+    } else if (initialContext.forceNewChat) {
+      // User clicked "AI Advisor" from Navbar - always open a fresh new chat session!
+      handleNewChat();
+      onClearInitialContext?.();
+    }
+  }, [initialContext]);
+
   // Switch to an existing chat session
   const handleSelectSession = (sessionId) => {
     setActiveSessionId(sessionId);
@@ -239,9 +337,16 @@ export default function AiChatPage() {
     setIsThinking(true);
 
     try {
+      const targetOfferCode = activeSession.targetOfferCode || null;
+      const targetPlanName = activeSession.targetPlanName || null;
+      const targetCategory = activeSession.targetOffer?.policyCategory || null;
+
       const res = await queryAgentApi({
         question: questionText,
-        conversationHistory: historyForApi
+        conversationHistory: historyForApi,
+        policyCodeFilter: targetOfferCode,
+        planNameFilter: targetPlanName,
+        policyTypeFilter: targetCategory
       });
 
       const data = res.data || {};
@@ -275,6 +380,8 @@ export default function AiChatPage() {
             return {
               ...s,
               updatedAt: new Date().toISOString(),
+              targetPolicyNumber: data.savedPolicy?.policyNumber || s.targetPolicyNumber,
+              targetPlanName: data.savedPolicy?.policyName || s.targetPlanName,
               messages: [...s.messages, agentMsg]
             };
           }
@@ -407,15 +514,30 @@ export default function AiChatPage() {
                   }`}
                 >
                   <div className="flex items-center space-x-2.5 min-w-0 flex-1 pr-2">
-                    <MessageSquare
-                      className={`w-3.5 h-3.5 shrink-0 ${
-                        isActive ? 'text-amber-400' : 'text-slate-500 group-hover:text-slate-400'
-                      }`}
-                    />
+                    {session.targetOfferCode ? (
+                      <Zap
+                        className={`w-3.5 h-3.5 shrink-0 fill-amber-400 ${
+                          isActive ? 'text-amber-400' : 'text-amber-500/70 group-hover:text-amber-400'
+                        }`}
+                      />
+                    ) : (
+                      <MessageSquare
+                        className={`w-3.5 h-3.5 shrink-0 ${
+                          isActive ? 'text-amber-400' : 'text-slate-500 group-hover:text-slate-400'
+                        }`}
+                      />
+                    )}
                     <div className="flex flex-col min-w-0">
-                      <span className="truncate font-medium text-xs text-slate-200">
-                        {session.title || 'Conversation'}
-                      </span>
+                      <div className="flex items-center gap-1.5 min-w-0">
+                        <span className="truncate font-medium text-xs text-slate-200">
+                          {session.title || 'Conversation'}
+                        </span>
+                        {session.targetOfferCode && (
+                          <span className="text-[9px] font-mono px-1 rounded bg-amber-500/20 text-amber-300 font-bold shrink-0">
+                            #{session.targetOfferCode}
+                          </span>
+                        )}
+                      </div>
                       {sessionTime && (
                         <span className="text-[10px] text-slate-500 leading-tight">
                           {sessionTime}
@@ -475,6 +597,11 @@ export default function AiChatPage() {
             <div className="min-w-0">
               <h2 className="text-xs sm:text-sm font-bold text-white flex items-center gap-2 truncate">
                 <span className="truncate">{activeSession.title || 'AI Insurance Advisor'}</span>
+                {activeSession.targetOfferCode && (
+                  <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-500/20 text-amber-300 border border-amber-500/40 shrink-0">
+                    Dedicated Advisor • #{activeSession.targetOfferCode}
+                  </span>
+                )}
                 {activeSavedPolicy?.status === 'ACTIVE' && (
                   <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 shrink-0">
                     Policy: {activeSavedPolicy.policyNumber}
@@ -482,21 +609,25 @@ export default function AiChatPage() {
                 )}
               </h2>
               <p className="text-[10px] sm:text-[11px] text-slate-400 truncate">
-                Explore coverage limits, quotes, or catch up with your existing policies
+                {activeSession.targetPlanName
+                  ? `Dedicated advisor for ${activeSession.targetPlanName} (${activeSession.targetOffer?.insurer || 'Plan'})`
+                  : 'Explore coverage limits, quotes, or catch up with your existing policies'}
               </p>
             </div>
           </div>
         </div>
 
-        {/* Catch-Up Bar for Enrolled Policies */}
-        {allUserPolicies && allUserPolicies.length > 0 && (
+        {/* Catch-Up Bar for Enrolled Policies (Active Only) */}
+        {allUserPolicies && allUserPolicies.filter((p) => p.status === 'ACTIVE').length > 0 && (
           <div className="px-5 py-2 bg-slate-950/95 border-b border-slate-800/80 flex items-center justify-between gap-3 overflow-x-auto text-[11px]">
             <div className="flex items-center gap-1.5 text-slate-300 shrink-0">
               <ShieldCheck className="w-3.5 h-3.5 text-emerald-400" />
               <span className="font-semibold text-slate-200">Your Enrolled Policies:</span>
             </div>
             <div className="flex items-center gap-2 overflow-x-auto py-0.5">
-              {allUserPolicies.map((p, pIdx) => (
+              {allUserPolicies
+                .filter((p) => p.status === 'ACTIVE')
+                .map((p, pIdx) => (
                 <button
                   key={p._id || pIdx}
                   onClick={() =>
@@ -547,16 +678,25 @@ export default function AiChatPage() {
                     <div className="flex items-center justify-between w-full">
                       <span className="flex items-center text-amber-400">
                         <Zap className="w-3 h-3 mr-1 fill-amber-400 inline" />
-                        Insurance Advisor
+                        {activeSession.targetPlanName ? `${activeSession.targetPlanName} Advisor` : 'Insurance Advisor'}
                       </span>
+                      {activeSession.targetOfferCode && (
+                        <span className="text-[9px] font-mono font-bold px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-300 border border-amber-500/30">
+                          #{activeSession.targetOfferCode}
+                        </span>
+                      )}
                     </div>
                   )}
                 </div>
 
-                <div className="text-xs leading-relaxed">{msg.text}</div>
+                {msg.sender === 'user' ? (
+                  <div className="text-xs leading-relaxed whitespace-pre-wrap">{msg.text}</div>
+                ) : (
+                  <ChatMessageRenderer content={msg.text} />
+                )}
 
-                {/* Recommended / Enrolled Plans from Database */}
-                {msg.recommendedOffers && msg.recommendedOffers.length > 0 && (
+                {/* Recommended / Enrolled Plans from Database (Hidden in dedicated policy chat) */}
+                {!activeSession.targetOfferCode && msg.recommendedOffers && msg.recommendedOffers.length > 0 && (
                   <div className="mt-4 pt-3 border-t border-slate-800 space-y-3">
                     <div className="flex items-center gap-1.5 text-[11px] font-bold text-amber-400">
                       <Sparkles className="w-3.5 h-3.5" />

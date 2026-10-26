@@ -110,7 +110,7 @@ export default function Navbar({ activeTab, setActiveTab, user, onLogout }) {
               return (
                 <button
                   key={item.id}
-                  onClick={() => setActiveTab(item.id)}
+                  onClick={() => setActiveTab(item.id, item.id === 'chat' ? { forceNewChat: true } : null)}
                   className={`flex items-center space-x-1.5 px-3 py-1.5 rounded-xl text-xs font-medium transition-all cursor-pointer shrink-0 ${
                     isActive
                       ? 'bg-sky-500/15 text-sky-400 border border-sky-500/30 shadow-sm'
@@ -218,7 +218,7 @@ export default function Navbar({ activeTab, setActiveTab, user, onLogout }) {
             return (
               <button
                 key={item.id}
-                onClick={() => setActiveTab(item.id)}
+                onClick={() => setActiveTab(item.id, item.id === 'chat' ? { forceNewChat: true } : null)}
                 className={`flex items-center space-x-1.5 px-2.5 py-1.5 rounded-md text-xs font-medium whitespace-nowrap ${
                   isActive
                     ? 'bg-sky-500/15 text-sky-400'

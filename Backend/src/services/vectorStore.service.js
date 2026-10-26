@@ -31,8 +31,8 @@ export const cosineSimilarity = (vecA = [], vecB = []) => {
   return denom > 0 ? dot / denom : 0;
 };
 
-const matchesCategoryFilter = (itemCategory = '', filterCategory = '') => {
-  if (!filterCategory || filterCategory === 'ALL') return true;
+const matchesCategoryFilter = (itemCategory = '', filterCategory = null) => {
+  if (!filterCategory) return true;
   return String(itemCategory).toUpperCase().trim() === String(filterCategory).toUpperCase().trim();
 };
 

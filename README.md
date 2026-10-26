@@ -1,23 +1,60 @@
-# Insurance AI Agent — Autonomous Policy Knowledge, FNOL Claims & Hybrid RAG Platform
+# Insurance AI Agent — Autonomous Conversational Advisory, Multi-Product Rate Catalogues & Enterprise RAG Platform
 
-**Insurance AI Agent** is a production-grade, enterprise-scale AI intelligence platform engineered specifically for **Insurance Policy Wordings, Multi-Product Rate Catalogues, First Notice of Loss (FNOL) Claims Adjudication, and Statutory Insurance Governance** (covering **Health**, **Motor & Auto**, **Home & Property**, **Life & Annuity**, **Commercial & Liability**, and **Accident / Agriculture**).
+**Insurance AI Agent** is a production-grade, enterprise-scale AI intelligence platform engineered specifically for **Autonomous Insurance Advisory, Conversational Risk Discovery, Multi-Product Rate Catalogues, First Notice of Loss (FNOL) Claims Adjudication, and Statutory Insurance Governance**. 
 
-The platform features an end-to-end **Zero-Hallucination RAG Pipeline**:
-1. **5-Stage Pre-RAG Filtration**: SHA-256 deduplication, multi-format extraction (PDF, Word, Excel, CSV), 4-point stratified sampling, insurance domain density evaluation, and LLM authenticity verification.
-2. **Two-Tier Spreadsheet Ingestion**: Automatically disaggregates multi-offer workbooks (e.g., `30_fictional_insurance_offers.xlsx`) into independent policy entities with auto-generated enterprise reference codes.
-3. **100% Local ONNX Embeddings**: Runs `all-MiniLM-L6-v2` locally on CPU ($0 external embedding cost, strict data privacy).
-4. **Hybrid Qdrant Retrieval**: Vector cosine similarity combined with an 8-signal domain re-ranking algorithm (+15.0 exact clause match boost).
-5. **Sub-15ms Semantic Prompt Caching**: Dedupes recurring user questions in Qdrant with zero token cost.
-6. **Live Single-Policy Editing**: Allows updating policy terms (deductibles, premiums, limits) and re-syncing vector embeddings in real time without touching other policies.
+The platform supports **10 comprehensive insurance lines**:
+1. **Auto & Motor Cover**
+2. **Health & Medical Cover**
+3. **Home & Property Cover**
+4. **Life & Annuity**
+5. **Commercial & Business Liability**
+6. **Personal Accident**
+7. **Agriculture & Crop Cover**
+8. **Travel & International Assistance**
+9. **Directors & Officers / Professional Liability**
+10. **General & Marine Transit / Asset Protection**
+
+---
+
+## 🌟 Key Architectural Capabilities
+
+### 1. Pure NLP Conversational Intake (No Rigid Scripts)
+- **Native Natural Language Processing (NLP)**: Understands customer intent, context, and domain nuances using Groq LPU inference (`openai/gpt-oss-120b`). Replaces brittle regular expressions with semantic intent extraction.
+- **Intelligent Intake Extraction**: Dynamically parses conversational parameters (who is insured, names, ages, vehicle details, health condition status, property features, business turnover) directly into structured JSON entities.
+
+### 2. Strict Privacy & Sensitive KYC Document Routing
+- **Conversational vs Sensitive Isolation**: Distinguishes between conversational parameters (needed for initial quote estimation) and confidential KYC/legal documents.
+- **Zero Confidential Leaks**: The advisor strictly avoids asking users to paste sensitive identity numbers or private documents into chat. If a user asks about sharing documents (such as **Aadhaar, PAN, vehicle RC copy, engine/chassis numbers, bank details, or tax returns**), the advisor automatically directs them to complete and upload them securely in their dedicated **Profile & Documents portal** (`/profile`).
+
+### 3. Gated 6-Offer Grounded Recommendation Engine
+- **Intake Completeness Gate**: Policy recommendation cards are strictly locked until the customer has shared the required conversational parameters for their domain.
+- **Courteous Early Handling**: If a user asks *"give me recommendations"* or *"show me plans"* before providing their details, the advisor warmly replies:
+  > *"I will gladly give you recommendations, but first please answer some questions so I can match you with the right policy for your needs."*
+  and prompts for the missing parameters.
+- **Intelligent 6-Offer Selection**: Once unlocked, the engine retrieves **6 recommendations** formatted for a responsive 2×3 card grid:
+  - **Category Isolation**: Strictly isolates offers from the active domain (`AUTO`, `HEALTH`, etc.).
+  - **Age Eligibility Filtering**: Strictly verifies `minimumEntryAge <= userAge <= maximumEntryAge`, eliminating ineligible plans.
+  - **Underwriting Alignment**: Rewards matches on vehicle specifications (e.g. Electric Vehicle / Tesla bonuses), pre-existing condition terms, senior care, and commercial fleet needs.
+  - **Catalog Backfill**: For specialized categories with fewer than 6 plans in catalog (e.g. `HOME`, `TRAVEL`), backfills the remaining slots with the highest-matching compatible `GENERAL` plans.
+
+### 4. Progressive CRUD Policy Persistence
+- **Zero Data Loss Architecture**: Tightly integrated with `policyDetailService` to load database Ground Truth (`getUserPolicies`) before every turn and progressively create or update pending/active policy drafts in MongoDB (`createPolicy` / `updatePolicy`).
+- **Target Policy Focus**: When launching a chat from a specific catalog plan, the advisor operates in dedicated 1-on-1 mode, answering limits, deductibles, waiting periods, and exclusions specifically for that target policy.
+
+### 5. Multi-Source Ingestion & Hybrid Vector RAG
+- **Two-Tier Spreadsheet Disaggregation**: Automatically ingests multi-product Excel workbooks (e.g. `30_fictional_insurance_offers.xlsx`), decomposes every row into an independent `PolicyOffer` record, assigns enterprise policy codes (`POL-AUTO-001`, `POL-HLTH-002`), and indexes dedicated vector points.
+- **5 Ingestion Guardrails**: SHA-256 deduplication, multi-format text extraction (PDF, DOCX, XLSX, CSV), 4-point stratified sampling, insurance domain density analyzer, and AI Gatekeeper authenticity evaluation.
+- **100% Local ONNX Embeddings**: Runs `all-MiniLM-L6-v2` locally on CPU via `@huggingface/transformers` ($0 external embedding cost, strict data sovereignty).
+- **Qdrant Vector Hybrid Retrieval**: High-precision vector cosine similarity with 8-signal domain re-ranking (+15.0 exact clause match, +6.0 exclusions, +5.5 deductibles).
 
 ---
 
 ## 📑 Technical Architecture & Documentation PDF
 
-A complete 6-page technical report and architectural specification has been generated and included directly in this repository:
-- 📕 **Official PDF Specification:** [`RAG_Architecture_and_Pipeline_Documentation.pdf`](./RAG_Architecture_and_Pipeline_Documentation.pdf)
-- 📄 **Markdown Architecture Guide:** [`docs/RAG_ARCHITECTURE_AND_PIPELINE.md`](./docs/RAG_ARCHITECTURE_AND_PIPELINE.md)
-- 📊 **Excel Batch Ingestion Spec:** [`excel_batch_ingestion_and_policy_offers_architecture.md`](./docs/excel_batch_ingestion_and_policy_offers_architecture.md)
+Complete technical reports and architectural specifications are available directly in this repository:
+- 📕 **Official Architecture & Orchestration Guide:** [`insurance_ai_agent_architecture_orchestration.md`](./insurance_ai_agent_architecture_orchestration.md)
+- 📄 **Markdown Architecture & Pipeline Guide:** [`docs/RAG_ARCHITECTURE_AND_PIPELINE.md`](./docs/RAG_ARCHITECTURE_AND_PIPELINE.md)
+- 📊 **Excel Batch Ingestion Spec:** [`docs/excel_batch_ingestion_and_policy_offers_architecture.md`](./docs/excel_batch_ingestion_and_policy_offers_architecture.md)
 
 ---
 
@@ -25,17 +62,16 @@ A complete 6-page technical report and architectural specification has been gene
 
 | Layer | Technology | Implementation Details |
 | :--- | :--- | :--- |
-| **Frontend Framework** | React 18 + Vite 5 | Pure JavaScript (`.jsx`), runs on `http://localhost:8080` with API proxy to `:5000` |
-| **UI Design System** | Tailwind CSS v3.4 | Enterprise Navy & Sky Blue theme (`#0f172a` Navy, `#0284c7` Sky, `#10b981` Emerald, `#a855f7` Purple) |
-| **HTTP Client** | Axios v1.7 | Integrated with global auth interceptors and automatic Bearer token injection |
+| **Frontend Framework** | React 18 + Vite 5 | SPA running on `http://localhost:8080` with API proxy to `:5000` |
+| **UI Design System** | Tailwind CSS v3.4 | Enterprise Dark Slate & Sky Blue theme (`#0f172a` Slate, `#0284c7` Sky, `#10b981` Emerald, `#f59e0b` Amber) |
+| **HTTP Client** | Axios v1.7 | Global auth interceptor with automatic Bearer token injection and error handling |
 | **Backend Framework** | Node.js (v22+) + Express 5 | ES Modules (`"type": "module"`), REST API on `http://localhost:5000/api` |
-| **Primary Database** | MongoDB + Mongoose v9.9 | Stores Users, Master `PolicyDocument` records, granular `PolicyOffer` catalogue, and Prompt Caches |
-| **Vector Database** | Qdrant (`localhost:6333`) | Collections: `policy_documents` (384-dim Cosine distance) & `semantic_cache` (prompt cache) |
-| **Local Embedding Engine** | `Xenova/all-MiniLM-L6-v2` | 100% local CPU inference via `@huggingface/transformers` ONNX Runtime (`384-dim`, **$0 token cost**) |
-| **Large Language Model** | Groq LPU Inference | `llama-3.3-70b-versatile` / `llama-3.1-8b-instant` with static prefix instructions and strict grounding |
-| **AI Gatekeeper** | 4-Point Stratified Sampler | Inspects offsets (`0%`, `33%`, `66%`, `90%`) with Domain Density Override for synthetic test benchmarks |
-| **Tabular Disaggregation** | SheetJS (`xlsx`) + Parser | Ingests `.xlsx`, `.xls`, `.csv`, auto-extracts individual policies, and assigns standard codes |
-| **Token Cost Governance** | Real-Time Cost Calculator | Audits prompt/completion token usage and calculates dollar cost per query |
+| **Primary Database** | MongoDB + Mongoose v8.9 | Database: `insurance_ai_agent` (`users`, `policydetails`, `policyoffers`, `policydocuments`) |
+| **Vector Database** | Qdrant (`localhost:6333`) | Collection: `insurance_policy_rules` (384-dim Cosine distance) with payload filtering |
+| **Local Embeddings** | `Xenova/all-MiniLM-L6-v2` | 100% local CPU ONNX inference via `@huggingface/transformers` (`384-dim`, **$0 token cost**) |
+| **Large Language Model** | Groq LPU Inference | `openai/gpt-oss-120b` (or `llama-3.3-70b-versatile`) with structured JSON response contract |
+| **Policy CRUD Service** | `policyDetailService` | Complete lifecycle management (create, read, update, delete, user sync) |
+| **Tabular Disaggregation** | SheetJS (`xlsx`) + Parser | Ingests `.xlsx`, `.xls`, `.csv`, auto-extracts individual policies, assigns standardized reference codes |
 
 ---
 
@@ -43,63 +79,38 @@ A complete 6-page technical report and architectural specification has been gene
 
 ```
 USER CLIENT (BROWSER - Port 8080)
-(React 18 + Vite + Tailwind CSS + Axios — Auth UI, Policy Vault, Granular Offers Catalog, Chunks Inspector)
+(React 18 + Vite + Tailwind CSS — Auth UI, Policy Vault, Granular Offers Catalog, ChatGPT-style AI Advisor)
  │
  ▼
-EXPRESS 5 REST API BACKEND (Port 5000)
+EXPRESS 5 REST API GATEWAY (Port 5000)
  │
- ├───────────────────────────────┬───────────────────────────────┬───────────────────────────────┐
- ▼                               ▼                               ▼                               ▼
-PRE-RAG FILTRATION & INGESTION   TABULAR DISAGGREGATION ENGINE   HYBRID RAG COPILOT              GRANULAR POLICY MUTATION
-1. Cryptographic SHA-256 Hash    1. SheetJS Workbook Parser      1. Conversational Context Rewriter1. PUT /api/policy-offers/:id
-2. Multi-Format Text Extraction  2. Auto-Detects 30+ Offers      2. Sub-15ms Semantic Cache Check2. MongoDB Document Update
-   (PDF, DOCX, XLSX, XLS, CSV)   3. Policy Code Standardizer     3. Local MiniLM Vector Search   3. Selective ONNX Embedding
-3. 4-Point Stratified Sampling      (e.g., POL-HLTH-001)         4. 8-Signal Re-Ranking Algorithm4. Targeted Qdrant Point Sync
-   (0%, 33%, 66%, 90% offsets)   4. Saves Granular PolicyOffer      (+15.0 Clause, +6.0 Exclusion)  (Zero side effects on
-4. Domain Density Analyzer          records in MongoDB           5. Groq Llama-3 Grounded Prompt    remaining 29 offers)
-5. AI Gatekeeper LLM Validation  5. Indexes Dedicated Qdrant     6. Verbatim Deductibles & FNOL
-   (Overrules test disclaimer)      Vector Point per Offer          Source Citations & Cost Audit
+ ├───────────────────────────┬───────────────────────────┬───────────────────────────┬───────────────────────────┐
+ ▼                           ▼                           ▼                           ▼                           ▼
+PRE-RAG FILTRATION          SPREADSHEET DISAGGREGATION  CONVERSATIONAL RAG ADVISOR  POLICY CRUD SERVICES        CATALOG & VECTOR SYNC
+1. Cryptographic SHA-256    1. SheetJS Workbook Parser  1. Ground Truth (DB sync)   1. policyDetailService      1. /api/offers CRUD
+2. Multi-Format Text Parser 2. Decomposes 30+ Offers    2. Sliding Window (16 msgs) 2. MongoDB PolicyDetail     2. Qdrant Point Upsert
+   (PDF, DOCX, XLSX, CSV)   3. Standard Policy Codes    3. Qdrant Semantic Search   3. Progressive Draft Save   3. Selective Vector
+3. 4-Point Stratified Sample   (e.g., POL-AUTO-001)     4. 10-Domain NLP Extraction 4. User Policy Array Sync      Re-embedding on Edit
+4. Domain Density Analyzer  4. Stores PolicyOffer in DB 5. KYC Privacy Separation   5. Real-Time Intake State   4. Deletion Cascade
+5. AI Gatekeeper Validation 5. Indexes Dedicated Vector 6. 6-Offer Gated Recs Engine
 ```
 
 ---
 
-## 3. Core Capabilities & Specialized Subsystems
+## 3. The 10 Insurance Domain Specifications
 
-### 3.1 Pre-RAG Filtration: The 5 Ingestion Guardrails
-To prevent non-insurance documents or duplicate files from corrupting vector retrieval, every uploaded file passes through 5 filters:
-1. **Cryptographic SHA-256 Deduplication:** Computes file hash before writing to disk. Duplicate indexed files are blocked immediately.
-2. **Multi-Format Extraction:** Seamlessly handles `.pdf` (`pdf-parse`), `.docx`/`.doc` (`mammoth`), `.xlsx`/`.xls`/`.csv` (`xlsx`), and `.txt`.
-3. **4-Point Stratified Sampling:** Samples four strategic offsets (Preamble, Perils, Deductibles/Exclusions, FNOL Rules) to evaluate multi-hundred-page policies in ~1,200 tokens.
-4. **Domain Density Analyzer:** Counts 12 core insurance indicators (`annual cover limit`, `pre-existing condition`, `waiting period`, `excess / deductible`, `inpatient`, `outpatient`, `claims process`, `underwriting`, `premium`, `endorsement`, `first notice of loss`, `sum insured`). If a document contains authentic policy terms but has a disclaimer (e.g., *"fictional test data"*), it automatically overrides false rejections.
-5. **AI Gatekeeper Validation:** Groq Llama-3 verifies document authenticity, returning confidence scores and classification types.
-
-### 3.2 Two-Tier Tabular Disaggregation Engine
-When an Excel file containing multiple insurance offers (such as `30_fictional_insurance_offers.xlsx`) is uploaded:
-- **Master Record:** Creates parent `PolicyDocument` with `isBatchCatalogue = true`.
-- **Granular Records:** Extracts every table row into an independent `PolicyOffer` record in MongoDB.
-- **Auto-Generated Policy Codes:** If the table lacks a code, the backend auto-generates standard codes:
-  - Health: `POL-HLTH-001`
-  - Motor: `POL-MOT-002`
-  - Property: `POL-HOM-003`
-  - Accident: `POL-ACC-004`
-- **Dedicated Vector Points:** Each offer receives its own point in Qdrant with full metadata payloads.
-
-### 3.3 8-Signal Hybrid Re-Ranking Algorithm
-Retrieved vectors from Qdrant are re-ranked using domain-specific mathematical scoring adjustments:
-- **Exact Policy / Clause Code Match:** `+15.0`
-- **Numerical Substring Code Match:** `+10.0`
-- **Section Title Match:** `+6.0`
-- **Exclusion Clause Query Prioritization:** `+6.0`
-- **Excess / Deductible Query Prioritization:** `+5.5`
-- **FNOL & Claims Process Prioritization:** `+4.5`
-- **Policy Category Alignment:** `+2.5`
-- **Domain Discriminator Keywords:** `+2.0 each`
-- **Table of Contents Demotion:** `-2.5`
-
-### 3.4 Multi-File Queue Upload & Catalog Inspector UI
-- **Multi-File Queue:** The upload dropzone allows selecting or dragging multiple files simultaneously, with an **"Add More Files"** button and individual file removal.
-- **Spreadsheet Batch Mode:** Automatically detects Excel spreadsheets and flags them as *Multi-Category Catalogues*.
-- **Granular Policy Catalog:** The Documents page includes a tab switcher between **Source Documents** and the **Granular Policy Offers Catalog**, featuring search, filtering, and inline **Edit Policy** modals.
+| # | Domain Category | Conversational Parameters (In-Chat Discovery) | Sensitive KYC & Official Documents (Direct to Profile) |
+| :- | :--- | :--- | :--- |
+| **1** | **AUTO (Motor)** | Driver age, vehicle make/model/variant/year, coverage type (Comprehensive vs Third-Party), usage (personal vs commercial), driving history & NCB %. | Vehicle Registration Certificate (RC copy), Engine & Chassis numbers, vehicle inspection photos/video. |
+| **2** | **HEALTH** | Ages and genders of members, pre-existing conditions (diabetes, hypertension, surgeries, or "None"), smoking/lifestyle, preferred coverage tier. | Aadhaar, PAN, Passport copies, prior medical records, discharge summaries, pre-policy checkup reports. |
+| **3** | **HOME** | Property type (house, flat, villa), building age, square footage/bedrooms, location, basic security (fire alarm, gated community). | Sale deed, property tax receipt, title deed, structural valuation certificates, interior photos. |
+| **4** | **LIFE** | Insured age, smoking/tobacco status, broad annual income, occupation type, nominee relation, desired sum assured. | Aadhaar, PAN, salary slips, Form 16, ITR copies, detailed clinical diagnostics (blood, ECG). |
+| **5** | **COMMERCIAL** | Nature of business trade, industry classification, estimated turnover, employee headcount, core risk priorities (liability, fleet, property). | GSTIN, PAN, incorporation certificate, trade license, audited balance sheets, safety audit clearances. |
+| **6** | **ACCIDENT** | Insured age, occupation risk classification (desk job vs field/machinery), pre-existing physical disabilities. | Government identity proofs, Nominee official ID proofs. |
+| **7** | **AGRICULTURE** | Crop type cultivated, approximate acreage, sowing timeline, irrigation source (rainfed vs canal). | Land title deed (Khata / 7/12 extract), patwari/panchayat sowing certificate, bank account details for subsidies. |
+| **8** | **TRAVEL** | Destination countries, trip dates/duration, traveler age, purpose of trip (leisure, business, adventure sports). | Passport copies, visa documents, flight ticket itineraries, boarding passes. |
+| **9** | **LIABILITY** | Scope of professional services, product lines, geographic spread (domestic vs USA/export), prior claims history. | Incorporation documents, audited financial statements, standard client service contracts. |
+| **10** | **GENERAL** | Precise asset/event description, coverage term, desired deductible/excess. | Original purchase invoices, valuation bills, customs/transit documents. |
 
 ---
 
@@ -109,9 +120,9 @@ The platform supports 3 primary enterprise roles:
 
 | Role | Target Persona | Domain Specific Fields | Permissions & Access |
 | :--- | :--- | :--- | :--- |
-| **`COMPANY_ADMIN`** | Insurance Firm Executive / IT Admin | `employeeId`, `department` *(Executive Administration)* | Full access: User CRUD, Policy Ingestion, Batch Disaggregation, Granular Policy Editing, Vector Deletion. |
-| **`UNDERWRITER`** / **`EMPLOYEE`** | Claims Adjuster / Underwriter | `employeeId`, `department` *(Claims & Underwriting)* | Access to Copilot, Policy Offers Catalog, inline policy editing, claim investigations. |
-| **`POLICYHOLDER`** | Customer / Client | `customerId`, `policyNumber`, `policyNumbers[]` | Policy coverage checks, excess/deductible inquiries, FNOL claim submissions. |
+| **`COMPANY_ADMIN`** | Insurance Firm Executive / IT Admin | `employeeId`, `department` *(Executive Administration)* | Full access: User Management, Master Document Ingestion, Batch Disaggregation, Granular Policy Editing, Vector Deletion. |
+| **`UNDERWRITER`** / **`EMPLOYEE`** | Claims Adjuster / Underwriter | `employeeId`, `department` *(Claims & Underwriting)* | Access to Policy Offers Catalog, inline policy editing, vector re-sync, claims underwriting tools. |
+| **`POLICYHOLDER`** | Customer / Client | `customerId`, `policyNumber`, `city`, `pincode` | AI Advisor chat, profile & KYC document vault, policy management, favorites, quote comparisons. |
 
 ---
 
@@ -123,36 +134,40 @@ Insurance-AI-Agent/
 │   ├── src/
 │   │   ├── config/
 │   │   │   ├── env.js                        # Environment loader with Zod validation
-│   │   │   └── db.js                         # Mongoose connection to MongoDB
+│   │   │   └── db.js                         # Mongoose connection to MongoDB (insurance_ai_agent)
 │   │   ├── controllers/
-│   │   │   ├── auth.controller.js            # User CRUD & Login dispatcher
-│   │   │   ├── policyDocument.controller.js  # Upload, Gatekeeper polling & document vault
+│   │   │   ├── auth.controller.js            # User signup, login, profile fetch, profile update
+│   │   │   ├── policyDetail.controller.js    # CRUD handlers for user PolicyDetail records
+│   │   │   ├── policyDocument.controller.js  # Upload, Gatekeeper polling & master document vault
 │   │   │   ├── policyOffer.controller.js     # Granular policy offer CRUD & vector sync
-│   │   │   └── ragAgent.controller.js        # RAG Copilot chat & semantic search
+│   │   │   └── ragAgent.controller.js        # RAG Advisor chat & semantic search handlers
 │   │   ├── middlewares/
-│   │   │   ├── auth.middleware.js            # authenticate, optionalAuthenticate, authorizeRoles
+│   │   │   ├── auth.middleware.js            # JWT verification and role-based access control
 │   │   │   ├── error.middleware.js           # Centralized API error handler
-│   │   │   └── upload.middleware.js          # Multer memory/disk storage (PDF, DOCX, XLSX, CSV)
+│   │   │   └── upload.middleware.js          # Multer memory storage (PDF, DOCX, XLSX, CSV)
 │   │   ├── models/
-│   │   │   ├── user.model.js                 # Admin, Employee & Policyholder accounts
-│   │   │   ├── policyDocument.model.js       # Master ingested policy documents & catalogues
-│   │   │   └── policyOffer.model.js          # Individual disaggregated policy offers & plans
+│   │   │   ├── user.model.js                 # User identity, credentials, consent flags, and role
+│   │   │   ├── policyDetail.model.js         # Enrolled policy instances (who, age, conditions, limits)
+│   │   │   ├── policyOffer.model.js          # Commercial insurance catalog plans (pricing, benefits)
+│   │   │   └── policyDocument.model.js       # Master ingested policy documents & catalogues
 │   │   ├── routes/
 │   │   │   ├── auth.routes.js                # /api/auth
-│   │   │   ├── policyDocument.routes.js      # /api/policy-documents & /api/documents
-│   │   │   ├── policyOffer.routes.js         # /api/policy-offers
+│   │   │   ├── policyDetail.routes.js        # /api/policies
+│   │   │   ├── policyOffer.routes.js         # /api/offers & /api/policy-offers
+│   │   │   ├── policyDocument.routes.js      # /api/documents & /api/policy-documents
 │   │   │   └── ragAgent.routes.js            # /api/agent & /api/rag
 │   │   ├── services/
-│   │   │   ├── auth.service.js               # User business logic & Bcrypt verification
-│   │   │   ├── aiGatekeeper.service.js       # 4-point stratified sampling & domain density analyzer
-│   │   │   ├── aiProvider.service.js         # Local Xenova MiniLM embeddings & Groq client
-│   │   │   ├── fileParser.service.js         # PDF, Word, and Excel row flattening
-│   │   │   ├── insuranceParser.service.js    # Semantic clause chunker with pre-header injection
+│   │   │   ├── ragAgent.service.js           # Unified NLP RAG engine, intake parsing, 6-offer ranking
+│   │   │   ├── policyDetail.service.js       # Pure CRUD lifecycle for user policies
 │   │   │   ├── policyOffer.service.js        # Workbook disaggregation & single-policy vector sync
 │   │   │   ├── policyDocument.service.js     # Master document ingestion orchestration
-│   │   │   ├── qdrant.service.js             # Qdrant REST client & collection management
-│   │   │   ├── vectorStore.service.js        # Document indexing & 8-signal hybrid re-ranking
-│   │   │   └── ragAgent.service.js           # Conversational contextualization & grounded answer generation
+│   │   │   ├── qdrant.service.js             # Qdrant client connection & collection management
+│   │   │   ├── vectorStore.service.js        # Document chunking & 8-signal hybrid re-ranking
+│   │   │   ├── fileParser.service.js         # PDF, Word, and Excel row flattening
+│   │   │   ├── insuranceParser.service.js    # Regex pattern extraction of policy numbers, dates, limits
+│   │   │   ├── aiGatekeeper.service.js       # 4-point stratified sampling & domain density analyzer
+│   │   │   ├── aiProvider.service.js         # Local Xenova MiniLM embeddings & Groq client
+│   │   │   └── auth.service.js               # Password hashing, token generation, user lookup
 │   │   ├── utils/
 │   │   │   ├── apiError.js                   # Standardized error exceptions
 │   │   │   ├── apiResponse.js                # Standardized JSON responses
@@ -160,39 +175,51 @@ Insurance-AI-Agent/
 │   │   │   └── jwt.js                        # JWT signing and verification
 │   │   ├── app.js                            # Express app bootstrap & route registration
 │   │   └── server.js                         # Port 5000 bootstrap & vector collection init
-│   ├── .env
-│   ├── package.json
+│   ├── .env                                  # Environment variables
+│   └── package.json                          # Backend dependencies
 │
 ├── Frontend/                                 # React 18 + Vite 5 + Tailwind CSS + Axios
 │   ├── src/
 │   │   ├── api/
 │   │   │   ├── client.js                     # Axios instance with auth interceptor
-│   │   │   ├── auth.api.js                   # Authentication & user management calls
+│   │   │   ├── auth.api.js                   # Authentication & user management API calls
+│   │   │   ├── policy.api.js                 # PolicyDetail API calls (get, update, delete)
 │   │   │   └── documents.api.js              # Documents, Policy Offers, and RAG Copilot calls
 │   │   ├── components/
-│   │   │   ├── Navbar.jsx                    # Navigation bar with role-based links
-│   │   │   ├── AiGatekeeperModal.jsx         # Real-time upload progress & gatekeeper feedback
-│   │   │   ├── PolicyOffersCatalog.jsx       # Granular policy offers data table & filters
-│   │   │   └── EditPolicyOfferModal.jsx      # Modal for editing policy terms & vector re-sync
+│   │   │   ├── Navbar.jsx                    # Responsive navigation header with user profile menu
+│   │   │   ├── ChatMessageRenderer.jsx       # Markdown renderer for AI messages (headings, lists, bold)
+│   │   │   ├── PolicyOffersCatalog.jsx       # Grid of insurance plan cards with filter tabs & search
+│   │   │   ├── PlanDetailsModal.jsx          # Modal detailing specific coverage, deductibles, exclusions
+│   │   │   ├── EditPolicyOfferModal.jsx      # Admin modal to edit policy terms & re-sync vectors
+│   │   │   ├── DeleteConfirmModal.jsx        # Confirmation modal for irreversible deletion actions
+│   │   │   └── AiGatekeeperModal.jsx         # Upload progress & gatekeeper evaluation modal
 │   │   ├── pages/
-│   │   │   ├── AuthPage.jsx                  # Clean Signup & Login interface
-│   │   │   ├── HomePage.jsx                  # Platform dashboard & quick actions
-│   │   │   ├── UploadDocumentPage.jsx        # Multi-file queue & spreadsheet batch upload
+│   │   │   ├── HomePage.jsx                  # Landing page with core value props and quick links
+│   │   │   ├── InsurancePage.jsx             # Product catalog page with category filtering & "Talk to Agent"
+│   │   │   ├── AiChatPage.jsx                # Multi-session AI Advisor with policy resumption & 2x3 cards
+│   │   │   ├── ProfilePage.jsx               # Personal identity form, KYC consent, and enrolled policy editor
 │   │   │   ├── DocumentsListPage.jsx         # Dual-tab view: Master Documents vs Policy Offers
-│   │   │   ├── DocumentDetailsModal.jsx      # Policy details & Semantic Chunks Inspector
-│   │   │   └── PeoplePage.jsx                # Role-based user administration
-│   │   ├── App.jsx                           # Application routing & layout
+│   │   │   ├── UploadDocumentPage.jsx        # Multi-file queue & spreadsheet batch upload dropzone
+│   │   │   ├── DocumentDetailsModal.jsx      # Inspect raw text chunks and vector metadata
+│   │   │   ├── PeoplePage.jsx                # User management table for admins to review accounts
+│   │   │   ├── DashboardPage.jsx             # System analytics overview
+│   │   │   └── AuthPage.jsx                  # Clean Signup & Login interface with role selection
+│   │   ├── context/
+│   │   │   └── AuthContext.jsx               # Global authentication state, tokens, and active profile
+│   │   ├── utils/
+│   │   │   └── favorites.js                  # Bookmark management for insurance plans
+│   │   ├── App.jsx                           # Application routing & active view management
+│   │   ├── index.css                         # Tailwind CSS styling and theme definitions
 │   │   └── main.jsx                          # Root DOM entry point
-│   ├── vite.config.js                        # Proxy configuration (/api -> http://localhost:5000)
-│   └── package.json
+│   ├── vite.config.js                        # Vite config with API proxy (/api -> http://localhost:5000)
+│   └── package.json                          # Frontend dependencies
 │
 ├── docs/                                     # Architecture & Technical Documentation
-│   ├── RAG_Architecture_and_Pipeline_Documentation.pdf # 6-page comprehensive PDF
+│   ├── RAG_Architecture_and_Pipeline_Documentation.pdf # Comprehensive PDF specification
 │   ├── RAG_ARCHITECTURE_AND_PIPELINE.md      # Full Markdown architecture specification
 │   └── excel_batch_ingestion_and_policy_offers_architecture.md # Excel batch ingestion spec
-├── scripts/
-│   └── generate_rag_pdf.py                   # ReportLab script for generating PDF documentation
-└── README.md
+├── insurance_ai_agent_architecture_orchestration.md # Full system orchestration guide
+└── README.md                                 # Primary repository README
 ```
 
 ---
@@ -202,23 +229,53 @@ Insurance-AI-Agent/
 ### Prerequisites
 - **Node.js**: `v22.0.0` or higher
 - **MongoDB**: Running locally on `mongodb://127.0.0.1:27017`
-- **Qdrant Vector Database**: Running on `http://localhost:6333` (via Docker)
-- **Python 3.10+** (optional, for compiling documentation PDFs)
+- **Qdrant Vector Database**: Running on `http://localhost:6333` (via Docker )
+- **Groq API Key**: Free API key from [Groq Console](https://console.groq.com)
 
-### Step 1: Start Qdrant Vector Database
+---
+
+### Step 1: Start Qdrant Vector Engine
 ```powershell
 docker run -d --name qdrant_insurance -p 6333:6333 -p 6334:6334 qdrant/qdrant:latest
 ```
 
-### Step 2: Start Backend Server (`Port 5000`)
+---
+
+### Step 2: Configure Environment Variables
+Inside `Backend/.env`:
+```env
+PORT=5000
+MONGODB_URI=mongodb://127.0.0.1:27017/insurance_ai_agent
+NODE_ENV=development
+CORS_ORIGIN=*
+JWT_SECRET=insurance_ai_super_secret_jwt_key_2026
+JWT_EXPIRES_IN=7d
+
+# Qdrant Vector Engine
+QDRANT_URL=http://localhost:6333
+QDRANT_COLLECTION_NAME=insurance_policy_rules
+
+# Groq LLM Inference
+GROQ_API_KEY=your_groq_api_key_here
+GROQ_MODEL=openai/gpt-oss-120b
+
+# Local Embeddings Engine
+EMBEDDING_PROVIDER=all-minilm
+```
+
+---
+
+### Step 3: Start Backend API Server (`Port 5000`)
 ```powershell
 cd Backend
 npm install
-node src/server.js
+npm run dev
 ```
-*Health Check: `http://127.0.0.1:5000/api/health`*
+*Health Check: `http://localhost:5000/api/health`*
 
-### Step 3: Start Frontend Dev Server (`Port 8080`)
+---
+
+### Step 4: Start Frontend Client (`Port 8080`)
 ```powershell
 cd ../Frontend
 npm install
@@ -230,41 +287,51 @@ Open **`http://localhost:8080`** in your browser.
 
 ## 7. REST API Endpoints Summary
 
-### Authentication & Users
+### Authentication & User Profiles (`/api/auth`)
 | Method | Endpoint | Access | Description |
 | :--- | :--- | :--- | :--- |
-| `POST` | `/api/auth/signup` | Public | Register new account. Returns user info (no auto-token). |
+| `POST` | `/api/auth/signup` | Public | Register new account. Returns user info. |
 | `POST` | `/api/auth/login` | Public | Authenticate user. Issues JWT Bearer token. |
-| `GET` | `/api/auth/users` | Authenticated | List all registered users with role and search filters. |
-| `GET` | `/api/auth/users/:id` | Authenticated | Get detailed user profile. |
+| `GET` | `/api/auth/me` | Authenticated | Retrieve current authenticated user profile. |
+| `PUT` | `/api/auth/profile` | Authenticated | Update user identity, contact details, and KYC consent. |
+| `GET` | `/api/auth/users` | Authenticated | List all registered users (supports role/search query). |
+| `GET` | `/api/auth/users/:id` | Authenticated | Inspect specific user account details. |
 | `PUT` | `/api/auth/users/:id` | `COMPANY_ADMIN` | Update user details, role, or policy numbers. |
-| `DELETE`| `/api/auth/users/:id` | `COMPANY_ADMIN` | Remove user account. |
+| `DELETE`| `/api/auth/users/:id` | `COMPANY_ADMIN` | Delete user account. |
 
-### Master Policy Documents
+### Enrolled Policies (`/api/policies`)
 | Method | Endpoint | Access | Description |
 | :--- | :--- | :--- | :--- |
-| `POST` | `/api/policy-documents` | `COMPANY_ADMIN` | Upload PDF, Word, or Excel workbook into Qdrant & MongoDB. |
-| `GET` | `/api/policy-documents` | Authenticated | List master policy documents with clause and token stats. |
-| `GET` | `/api/policy-documents/:id` | Authenticated | Get master document details and gatekeeper metadata. |
-| `GET` | `/api/policy-documents/:id/chunks` | Authenticated | Retrieve semantic chunks from Qdrant vector store. |
-| `GET` | `/api/policy-documents/upload-progress/:uploadId` | Public / Auth | Poll real-time upload, Gatekeeper, and vector indexing progress. |
-| `DELETE`| `/api/policy-documents/:id` | `COMPANY_ADMIN` | Delete master document, child policy offers, and Qdrant vectors. |
+| `GET` | `/api/policies` | Authenticated | List all policies belonging to authenticated user. |
+| `POST` | `/api/policies` | Authenticated | Attach a new policy to user account. |
+| `GET` | `/api/policies/:id` | Authenticated | Retrieve single policy details. |
+| `PUT` | `/api/policies/:id` | Authenticated | Update enrolled policy details (who, age, conditions). |
+| `DELETE`| `/api/policies/:id` | Authenticated | Remove policy association. |
 
-### Granular Policy Offers Catalogue
+### Conversational AI Advisor (`/api/agent`)
 | Method | Endpoint | Access | Description |
 | :--- | :--- | :--- | :--- |
-| `GET` | `/api/policy-offers` | Authenticated | List individual policy offers with filters (category, insurer, search). |
-| `GET` | `/api/policy-offers/:id` | Authenticated | Get single policy offer details. |
-| `PUT` | `/api/policy-offers/:id` | `COMPANY_ADMIN`, `UNDERWRITER` | Update policy terms (excess, premium) and re-sync Qdrant vector in real time. |
-| `DELETE`| `/api/policy-offers/:id` | `COMPANY_ADMIN`, `UNDERWRITER` | Delete single policy offer and remove its point from Qdrant. |
+| `POST` | `/api/agent/query` | Authenticated | Primary RAG advisor chat. Understands intent via NLP, maintains sliding history, syncs MongoDB Ground Truth, and returns 6 filtered recommendations when ready. |
+| `GET` | `/api/agent/search` | Authenticated | Semantic & hybrid search across indexed policy clauses and catalog offers. |
 
-### RAG Copilot & Semantic Retrieval
+### Master Policy Documents (`/api/documents` & `/api/policy-documents`)
 | Method | Endpoint | Access | Description |
 | :--- | :--- | :--- | :--- |
-| `POST` | `/api/agent/query` | Authenticated | Ask policy question. Contextualizes follow-ups, retrieves clauses, and returns grounded answer. |
-| `GET` | `/api/agent/search` | Authenticated | Semantic & hybrid search across policy clauses and offers. |
+| `POST` | `/api/documents/upload` | `COMPANY_ADMIN` | Upload PDF, Word, or Excel workbook into Qdrant & MongoDB. |
+| `GET` | `/api/documents` | Authenticated | List master policy documents with clause and token stats. |
+| `GET` | `/api/documents/:id` | Authenticated | Get master document details and gatekeeper metadata. |
+| `GET` | `/api/documents/:id/chunks` | Authenticated | Retrieve semantic chunks from Qdrant vector store. |
+| `DELETE`| `/api/documents/:id` | `COMPANY_ADMIN` | Delete master document, disaggregated offers, and vectors. |
+
+### Granular Policy Offers Catalog (`/api/offers` & `/api/policy-offers`)
+| Method | Endpoint | Access | Description |
+| :--- | :--- | :--- | :--- |
+| `GET` | `/api/offers` | Authenticated | List individual policy offers with filters (category, insurer, search). |
+| `GET` | `/api/offers/:id` | Authenticated | Get single policy offer details. |
+| `PUT` | `/api/offers/:id` | `COMPANY_ADMIN`, `UNDERWRITER` | Update policy terms (excess, premium) and re-sync Qdrant vector point in real time. |
+| `DELETE`| `/api/offers/:id` | `COMPANY_ADMIN`, `UNDERWRITER` | Delete single policy offer and remove its point from Qdrant. |
 
 ---
 
 ## 8. License
-Distributed under the MIT License. Built for enterprise insurance compliance and autonomous claims intelligence.
+Distributed under the MIT License. Built for enterprise insurance compliance, autonomous claims intelligence, and intelligent conversational advisory.

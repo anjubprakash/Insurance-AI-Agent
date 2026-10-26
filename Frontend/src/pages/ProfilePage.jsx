@@ -95,8 +95,15 @@ export default function ProfilePage({ user: propUser, onNavigateToTab }) {
 
   // Selected Policy Form state (for inspecting and editing an enrolled policy)
   const [activePolicyForm, setActivePolicyForm] = useState(null);
+  const [initialPolicyData, setInitialPolicyData] = useState(null);
   const [isSavingPolicy, setIsSavingPolicy] = useState(false);
   const [isDeletingPolicy, setIsDeletingPolicy] = useState(false);
+
+  const hasPolicyChanges = Boolean(
+    activePolicyForm &&
+    initialPolicyData &&
+    JSON.stringify(activePolicyForm) !== initialPolicyData
+  );
 
   // On mount: Fetch user profile & user policies
   useEffect(() => {
@@ -156,7 +163,13 @@ export default function ProfilePage({ user: propUser, onNavigateToTab }) {
       ) {
         const matching = userPols.find((p) => p._id === currentNav);
         if (matching) {
-          setActivePolicyForm({ ...matching });
+          const formatted = {
+            ...matching,
+            insuredName: matching.insuredName || matching.nomineeName || '',
+            healthOrRiskConditions: matching.healthOrRiskConditions || ''
+          };
+          setActivePolicyForm(formatted);
+          setInitialPolicyData(JSON.stringify(formatted));
         } else {
           setSelectedNav('policies');
           localStorage.setItem('profile_selected_nav', 'policies');
@@ -178,13 +191,16 @@ export default function ProfilePage({ user: propUser, onNavigateToTab }) {
       localStorage.setItem('profile_selected_nav', navKey);
     } catch {}
     if (policyData) {
-      setActivePolicyForm({
+      const formatted = {
         ...policyData,
         insuredName: policyData.insuredName || policyData.nomineeName || '',
         healthOrRiskConditions: policyData.healthOrRiskConditions || ''
-      });
+      };
+      setActivePolicyForm(formatted);
+      setInitialPolicyData(JSON.stringify(formatted));
     } else {
       setActivePolicyForm(null);
+      setInitialPolicyData(null);
     }
   };
 
@@ -257,6 +273,7 @@ export default function ProfilePage({ user: propUser, onNavigateToTab }) {
         prev.map((p) => (p._id === updatedPolicy._id ? updatedPolicy : p))
       );
       setActivePolicyForm({ ...updatedPolicy });
+      setInitialPolicyData(JSON.stringify(updatedPolicy));
       showToast(`Policy #${updatedPolicy.policyNumber} updated successfully!`, 'success');
       loadProfileAndPolicies();
     } catch (err) {
@@ -286,6 +303,224 @@ export default function ProfilePage({ user: propUser, onNavigateToTab }) {
       showToast(err.message || 'Failed to delete policy', 'error');
     } finally {
       setIsDeletingPolicy(false);
+    }
+  };
+
+  /**
+   * Confirms and activates a pending policy
+   */
+  const handleConfirmAndActivatePolicy = async (policyToActivate = null) => {
+    const target = policyToActivate || activePolicyForm;
+    if (!target || !target._id) return;
+    setIsSavingPolicy(true);
+    try {
+      const payload = { ...target, status: 'ACTIVE' };
+      const res = await updatePolicyApi(target._id, payload);
+      const updatedPolicy = res.data;
+
+      setPolicies((prev) =>
+        prev.map((p) => (p._id === updatedPolicy._id ? updatedPolicy : p))
+      );
+      if (activePolicyForm && activePolicyForm._id === target._id) {
+        setActivePolicyForm({ ...updatedPolicy });
+        setInitialPolicyData(JSON.stringify(updatedPolicy));
+      }
+      showToast(`Policy #${updatedPolicy.policyNumber} confirmed and activated!`, 'success');
+      loadProfileAndPolicies();
+    } catch (err) {
+      showToast(err.message || 'Failed to activate policy', 'error');
+    } finally {
+      setIsSavingPolicy(false);
+    }
+  };
+
+  /**
+   * Computes policy intake completion score (0-100%) and readiness status
+   */
+  const getPolicyIntakeStatus = (policy) => {
+    if (!policy) return { percent: 0, isReady: false, label: 'Pending', missing: [] };
+    if (policy.status === 'ACTIVE') {
+      return { percent: 100, isReady: true, label: 'ACTIVE', missing: [] };
+    }
+
+    const type = (policy.insuranceType || 'HEALTH').toUpperCase();
+    const missing = [];
+
+    if (!policy.whoIsInsured || policy.whoIsInsured.trim() === '') {
+      missing.push('Who is Covered');
+    }
+    if (!policy.insuredName || policy.insuredName.trim() === '' || policy.insuredName.trim().toLowerCase() === 'pending') {
+      missing.push('Insured Name');
+    }
+    if (
+      !policy.healthOrRiskConditions ||
+      policy.healthOrRiskConditions.trim() === '' ||
+      policy.healthOrRiskConditions.trim().toLowerCase() === 'pending'
+    ) {
+      missing.push(
+        type === 'AUTO'
+          ? 'Vehicle Details / Reg'
+          : type === 'HOME'
+          ? 'Property Details'
+          : type === 'COMMERCIAL'
+          ? 'Business Asset Details'
+          : 'Health / Risk Details'
+      );
+    }
+
+    if (type === 'COMMERCIAL' || type === 'HOME') {
+      if (!policy.sumInsured || policy.sumInsured.trim() === '') {
+        missing.push('Coverage Limit');
+      }
+    } else {
+      if (policy.coveredAge === null || policy.coveredAge === undefined || policy.coveredAge === '' || Number(policy.coveredAge) <= 0) {
+        missing.push(type === 'AUTO' ? 'Driver Age' : 'Covered Age');
+      }
+    }
+
+    const totalFields = 4;
+    const filledCount = Math.max(0, totalFields - missing.length);
+    const percent = Math.min(100, Math.round((filledCount / totalFields) * 100));
+    const isReady = missing.length === 0;
+
+    return {
+      percent,
+      isReady,
+      missing,
+      label: isReady ? 'READY TO CONFIRM' : `${percent}% COLLECTED`
+    };
+  };
+
+  /**
+   * Returns category-tailored column labels and values for the policy card
+   * (Ensures CAR/AUTO never displays medical/health details!)
+   */
+  const getCategoryDisplayFields = (policy) => {
+    const type = (policy.insuranceType || 'HEALTH').toUpperCase();
+    const isSelf = policy.whoIsInsured === 'SELF';
+    const fallbackName = isSelf ? userProfile?.name || 'Self' : 'Pending';
+    const insuredName = policy.insuredName || fallbackName;
+
+    switch (type) {
+      case 'AUTO':
+        return {
+          col1Label: 'Driver / Entity',
+          col1Val: policy.whoIsInsured || 'Driver',
+          col2Label: 'Insured Name',
+          col2Val: insuredName,
+          col3Label: 'Driver Age',
+          col3Val: policy.coveredAge ? `${policy.coveredAge} yrs` : 'Pending',
+          col4Label: 'Vehicle Details / Reg',
+          col4Val: policy.healthOrRiskConditions || 'Pending'
+        };
+      case 'HOME':
+        return {
+          col1Label: 'Property Type',
+          col1Val: policy.whoIsInsured || 'Residential',
+          col2Label: 'Occupant / Owner',
+          col2Val: insuredName,
+          col3Label: 'Rebuild / Coverage',
+          col3Val: policy.sumInsured || 'Standard',
+          col4Label: 'Property Details & Security',
+          col4Val: policy.healthOrRiskConditions || 'Pending'
+        };
+      case 'COMMERCIAL':
+        return {
+          col1Label: 'Entity Type',
+          col1Val: 'Business',
+          col2Label: 'Company Name',
+          col2Val: insuredName,
+          col3Label: 'Coverage Limit',
+          col3Val: policy.sumInsured || 'Standard',
+          col4Label: 'Trade & Business Activities',
+          col4Val: policy.healthOrRiskConditions || 'Pending'
+        };
+      case 'LIFE':
+        return {
+          col1Label: 'Insured Person',
+          col1Val: policy.whoIsInsured || 'Life Insured',
+          col2Label: 'Full Name',
+          col2Val: insuredName,
+          col3Label: 'Entry Age',
+          col3Val: policy.coveredAge ? `${policy.coveredAge} yrs` : 'Pending',
+          col4Label: 'Nominee / Beneficiary',
+          col4Val: policy.nomineeName || policy.healthOrRiskConditions || 'Pending'
+        };
+      case 'TRAVEL':
+        return {
+          col1Label: 'Traveller',
+          col1Val: policy.whoIsInsured || 'Traveller',
+          col2Label: 'Full Name',
+          col2Val: insuredName,
+          col3Label: 'Traveller Age',
+          col3Val: policy.coveredAge ? `${policy.coveredAge} yrs` : 'Pending',
+          col4Label: 'Trip & Destination',
+          col4Val: policy.healthOrRiskConditions || 'Pending'
+        };
+      case 'HEALTH':
+      default:
+        return {
+          col1Label: 'Who Is Insured',
+          col1Val: policy.whoIsInsured || 'Self',
+          col2Label: 'Insured Name',
+          col2Val: insuredName,
+          col3Label: 'Covered Age',
+          col3Val: policy.coveredAge ? `${policy.coveredAge} yrs` : 'Pending',
+          col4Label: 'Conditions / Medical',
+          col4Val: policy.healthOrRiskConditions || 'Pending'
+        };
+    }
+  };
+
+  /**
+   * Returns category-tailored labels & placeholders for the Policy Form inputs
+   */
+  const getCategoryFormConfig = (insuranceType) => {
+    const type = (insuranceType || 'HEALTH').toUpperCase();
+    switch (type) {
+      case 'AUTO':
+        return {
+          ageLabel: '4. Primary Driver Age',
+          agePlaceholder: 'e.g. 35',
+          detailLabel: '5. Vehicle Make, Model, Year & Registration',
+          detailPlaceholder: 'e.g. 2022 Ford Focus, Reg: AB22 CDE, Clean record'
+        };
+      case 'HOME':
+        return {
+          ageLabel: '4. Year Built / Property Age',
+          agePlaceholder: 'e.g. 1995',
+          detailLabel: '5. Property Type, Address & Security Features',
+          detailPlaceholder: 'e.g. 3-Bed Detached, Manchester, Approved deadbolt locks'
+        };
+      case 'COMMERCIAL':
+        return {
+          ageLabel: '4. Years Trading / Established',
+          agePlaceholder: 'e.g. 5',
+          detailLabel: '5. Business Trade, Staff Count & Turnover',
+          detailPlaceholder: 'e.g. Retail electronics store, 5 staff, £200k turnover'
+        };
+      case 'LIFE':
+        return {
+          ageLabel: '4. Insured Person Age',
+          agePlaceholder: 'e.g. 42',
+          detailLabel: '5. Smoking Status & Medical History',
+          detailPlaceholder: 'e.g. Non-smoker, clean health history'
+        };
+      case 'TRAVEL':
+        return {
+          ageLabel: '4. Traveller Age',
+          agePlaceholder: 'e.g. 28',
+          detailLabel: '5. Destination Country & Trip Duration',
+          detailPlaceholder: 'e.g. Spain, 14 days, Single Trip'
+        };
+      case 'HEALTH':
+      default:
+        return {
+          ageLabel: '4. Covered Person Age',
+          agePlaceholder: 'e.g. 64',
+          detailLabel: '5. Health Conditions / Medical History',
+          detailPlaceholder: 'e.g. Type 2 diabetes, Hypertension, or None'
+        };
     }
   };
 
@@ -636,7 +871,7 @@ export default function ProfilePage({ user: propUser, onNavigateToTab }) {
                 <div className="flex items-center gap-2.5">
                   <button
                     type="button"
-                    onClick={() => onNavigateToTab && onNavigateToTab('chat')}
+                    onClick={() => onNavigateToTab && onNavigateToTab('chat', { forceNewChat: true })}
                     className="px-3.5 py-2 bg-amber-500/15 hover:bg-amber-500/25 text-amber-300 border border-amber-500/40 rounded-xl text-xs font-bold flex items-center space-x-1.5 transition-all cursor-pointer"
                   >
                     <Zap className="w-3.5 h-3.5 fill-amber-400 text-amber-400" />
@@ -662,69 +897,122 @@ export default function ProfilePage({ user: propUser, onNavigateToTab }) {
                 </div>
               ) : (
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  {policies.map((p) => (
-                    <div
-                      key={p._id}
-                      onClick={() => handleSelectNav(p._id, p)}
-                      className="p-5 bg-slate-950/70 hover:bg-slate-800/60 border border-slate-800 hover:border-emerald-500/40 rounded-2xl cursor-pointer transition-all flex flex-col justify-between space-y-4 group shadow-lg"
-                    >
-                      <div className="space-y-2.5">
-                        <div className="flex items-center justify-between gap-2">
-                          <span className="px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-sky-500/20 text-sky-300 border border-sky-500/30">
-                            Category: {p.insuranceType || 'HEALTH'}
-                          </span>
-                          <span
-                            className={`px-2.5 py-0.5 rounded-full text-[10px] font-bold border ${
-                              p.status === 'ACTIVE'
-                                ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/30'
-                                : 'bg-amber-500/20 text-amber-300 border-amber-500/30'
-                            }`}
-                          >
-                            {p.status === 'PENDING' ? 'COLLECTING DETAILS' : p.status || 'ACTIVE'}
-                          </span>
+                  {policies.map((p) => {
+                    const fields = getCategoryDisplayFields(p);
+                    const intake = getPolicyIntakeStatus(p);
+
+                    return (
+                      <div
+                        key={p._id}
+                        onClick={() => handleSelectNav(p._id, p)}
+                        className="p-5 bg-slate-950/70 hover:bg-slate-800/60 border border-slate-800 hover:border-emerald-500/40 rounded-2xl cursor-pointer transition-all flex flex-col justify-between space-y-4 group shadow-lg"
+                      >
+                        <div className="space-y-2.5">
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-sky-500/20 text-sky-300 border border-sky-500/30">
+                              Category: {p.insuranceType || 'HEALTH'}
+                            </span>
+                            <span
+                              className={`px-2.5 py-0.5 rounded-full text-[10px] font-bold border ${
+                                p.status === 'ACTIVE'
+                                  ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/30'
+                                  : 'bg-amber-500/20 text-amber-300 border-amber-500/30'
+                              }`}
+                            >
+                              {p.status === 'PENDING' ? 'COLLECTING DETAILS' : p.status || 'ACTIVE'}
+                            </span>
+                          </div>
+
+                          <div>
+                            <h3 className="text-sm font-bold text-white group-hover:text-emerald-300 transition-colors">
+                              {p.policyName}
+                            </h3>
+                            <p className="font-mono text-[11px] text-emerald-400 mt-0.5">
+                              #{p.policyNumber}
+                            </p>
+                          </div>
+
+                          {/* Category-Specific Intake Columns */}
+                          <div className="grid grid-cols-2 gap-2 pt-2 border-t border-slate-800/80 text-[11px] text-slate-300">
+                            <div>
+                              <span className="text-slate-500 block text-[10px]">{fields.col1Label}</span>
+                              <span className="font-semibold text-white truncate block">{fields.col1Val || '—'}</span>
+                            </div>
+                            <div>
+                              <span className="text-slate-500 block text-[10px]">{fields.col2Label}</span>
+                              <span className="font-semibold text-white truncate block">{fields.col2Val || 'Pending'}</span>
+                            </div>
+                            <div>
+                              <span className="text-slate-500 block text-[10px]">{fields.col3Label}</span>
+                              <span className="font-semibold text-white truncate block">{fields.col3Val || 'Pending'}</span>
+                            </div>
+                            <div>
+                              <span className="text-slate-500 block text-[10px]">{fields.col4Label}</span>
+                              <span className="font-semibold text-white truncate block">{fields.col4Val || 'Pending'}</span>
+                            </div>
+                          </div>
+
+                          {/* Small Status & Intake Progress Bar */}
+                          <div className="pt-2 border-t border-slate-800/80 space-y-1.5">
+                            <div className="flex items-center justify-between text-[10px]">
+                              <span className="text-slate-400 font-medium">Policy Intake Progress</span>
+                              <span className={`font-bold font-mono ${p.status === 'ACTIVE' || intake.isReady ? 'text-emerald-400' : 'text-amber-400'}`}>
+                                {p.status === 'ACTIVE' ? '100% Active' : intake.label}
+                              </span>
+                            </div>
+                            <div className="w-full h-1.5 bg-slate-800 rounded-full overflow-hidden">
+                              <div
+                                className={`h-full rounded-full transition-all duration-500 ${
+                                  p.status === 'ACTIVE'
+                                    ? 'bg-gradient-to-r from-emerald-500 to-teal-400 shadow-[0_0_8px_rgba(16,185,129,0.5)]'
+                                    : intake.isReady
+                                    ? 'bg-gradient-to-r from-emerald-500 to-teal-400'
+                                    : 'bg-gradient-to-r from-amber-500 to-yellow-400'
+                                }`}
+                                style={{ width: `${p.status === 'ACTIVE' ? 100 : Math.max(intake.percent, 25)}%` }}
+                              />
+                            </div>
+                          </div>
                         </div>
 
-                        <div>
-                          <h3 className="text-sm font-bold text-white group-hover:text-emerald-300 transition-colors">
-                            {p.policyName}
-                          </h3>
-                          <p className="font-mono text-[11px] text-emerald-400 mt-0.5">
-                            #{p.policyNumber}
-                          </p>
-                        </div>
+                        {/* Footer Actions: Open Form + Quick Confirm */}
+                        <div className="pt-2 border-t border-slate-800/60 flex items-center justify-between gap-2 text-xs font-bold text-emerald-400">
+                          <div className="flex items-center space-x-1 group-hover:text-emerald-300">
+                            <span>Open Policy Details Form</span>
+                            <ChevronRight className="w-4 h-4 group-hover:translate-x-1 transition-transform" />
+                          </div>
 
-                        <div className="grid grid-cols-2 gap-2 pt-2 border-t border-slate-800/80 text-[11px] text-slate-300">
-                          <div>
-                            <span className="text-slate-500 block text-[10px]">Who Is Insured</span>
-                            <span className="font-semibold text-white">{p.whoIsInsured || '—'}</span>
-                          </div>
-                          <div>
-                            <span className="text-slate-500 block text-[10px]">Insured Name</span>
-                            <span className="font-semibold text-white">
-                              {p.insuredName || (p.whoIsInsured === 'SELF' ? userProfile.name : 'Pending')}
-                            </span>
-                          </div>
-                          <div>
-                            <span className="text-slate-500 block text-[10px]">Covered Age</span>
-                            <span className="font-semibold text-white">
-                              {p.coveredAge ? `${p.coveredAge} yrs` : 'Pending'}
-                            </span>
-                          </div>
-                          <div>
-                            <span className="text-slate-500 block text-[10px]">Conditions / Risks</span>
-                            <span className="font-semibold text-white truncate block">
-                              {p.healthOrRiskConditions || 'Pending'}
-                            </span>
-                          </div>
+                          {p.status === 'PENDING' && (
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                if (!intake.isReady) {
+                                  handleSelectNav(p._id, p);
+                                  return;
+                                }
+                                handleConfirmAndActivatePolicy(p);
+                              }}
+                              disabled={!intake.isReady || isSavingPolicy}
+                              className={`px-2.5 py-1 rounded-lg text-[11px] font-bold flex items-center space-x-1 transition-all shrink-0 ${
+                                intake.isReady
+                                  ? 'bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 hover:text-white border border-emerald-500/40 cursor-pointer shadow-sm'
+                                  : 'bg-slate-800 text-slate-500 border border-slate-700/50 cursor-not-allowed opacity-60'
+                              }`}
+                              title={
+                                intake.isReady
+                                  ? 'Confirm and activate this policy immediately'
+                                  : `Missing details (${intake.missing.join(', ')}). Click to fill.`
+                              }
+                            >
+                              <CheckCircle2 className={`w-3.5 h-3.5 ${intake.isReady ? 'text-emerald-400' : 'text-slate-500'}`} />
+                              <span>{intake.isReady ? 'Confirm & Activate' : 'Pending Details'}</span>
+                            </button>
+                          )}
                         </div>
                       </div>
-
-                      <div className="pt-2 border-t border-slate-800/60 flex items-center justify-between text-xs font-bold text-emerald-400">
-                        <span>Open Policy Details Form</span>
-                        <ChevronRight className="w-4 h-4 group-hover:translate-x-1 transition-transform" />
-                      </div>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
               )}
             </div>
@@ -753,7 +1041,7 @@ export default function ProfilePage({ user: propUser, onNavigateToTab }) {
                 <div className="flex items-center gap-2.5">
                   <button
                     type="button"
-                    onClick={() => onNavigateToTab && onNavigateToTab('chat')}
+                    onClick={() => onNavigateToTab && onNavigateToTab('chat', { forceNewChat: true })}
                     className="px-3.5 py-2 bg-amber-500/15 hover:bg-amber-500/25 text-amber-300 border border-amber-500/40 rounded-xl text-xs font-bold flex items-center space-x-1.5 transition-all cursor-pointer"
                   >
                     <Zap className="w-3.5 h-3.5 fill-amber-400 text-amber-400" />
@@ -874,7 +1162,7 @@ export default function ProfilePage({ user: propUser, onNavigateToTab }) {
                       <div className="pt-3 border-t border-slate-800/80 flex items-center justify-between gap-2">
                         <button
                           type="button"
-                          onClick={() => onNavigateToTab && onNavigateToTab('chat', fav.policyCategory || 'ALL')}
+                          onClick={() => onNavigateToTab && onNavigateToTab('chat', { targetOffer: fav, forceNewChat: true })}
                           className="px-3 py-1.5 bg-amber-500/15 hover:bg-amber-500/25 text-amber-300 border border-amber-500/30 rounded-xl text-xs font-bold flex items-center space-x-1.5 transition-all cursor-pointer"
                         >
                           <Zap className="w-3.5 h-3.5 fill-amber-400 text-amber-400" />
@@ -937,20 +1225,19 @@ export default function ProfilePage({ user: propUser, onNavigateToTab }) {
                 <div className="flex flex-wrap items-center gap-2 self-end sm:self-center">
                   <button
                     type="button"
-                    onClick={() => handleSelectNav('policies')}
-                    className="px-3 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl text-xs font-semibold transition-colors cursor-pointer"
-                  >
-                    ← All Policies
-                  </button>
-
-                  <button
-                    type="button"
                     onClick={() =>
                       onNavigateToTab &&
-                      onNavigateToTab('chat', activePolicyForm.insuranceType || 'ALL')
+                      onNavigateToTab('chat', {
+                        targetOffer: {
+                          planName: activePolicyForm.policyName,
+                          policyReferenceCode: activePolicyForm.policyNumber,
+                          policyCategory: activePolicyForm.insuranceType
+                        },
+                        targetPolicyNumber: activePolicyForm.policyNumber
+                      })
                     }
                     className="px-3.5 py-2 bg-amber-500/15 hover:bg-amber-500/25 text-amber-300 border border-amber-500/40 rounded-xl text-xs font-bold flex items-center space-x-1.5 transition-all cursor-pointer"
-                    title="Continue chatting with AI Advisor"
+                    title="Continue chatting with AI Advisor about this policy"
                   >
                     <Zap className="w-3.5 h-3.5 fill-amber-400 text-amber-400" />
                     <span>Ask AI Advisor</span>
@@ -960,202 +1247,305 @@ export default function ProfilePage({ user: propUser, onNavigateToTab }) {
                     type="button"
                     onClick={() => handleDeletePolicy(activePolicyForm._id)}
                     disabled={isDeletingPolicy}
-                    className="p-2 bg-red-500/10 hover:bg-red-500/20 text-red-400 border border-red-500/30 rounded-xl text-xs font-semibold flex items-center space-x-1.5 transition-colors disabled:opacity-50 cursor-pointer"
+                    className="p-2.5 bg-red-500/10 hover:bg-red-500/20 text-red-400 hover:text-red-300 border border-red-500/30 hover:border-red-500/50 rounded-xl transition-all disabled:opacity-50 cursor-pointer"
                     title="Delete Policy"
+                    aria-label="Delete Policy"
                   >
                     <Trash2 className="w-4 h-4" />
-                    <span>Delete</span>
                   </button>
 
                   <button
                     type="submit"
-                    disabled={isSavingPolicy}
-                    className="px-5 py-2 bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold text-xs rounded-xl flex items-center space-x-1.5 shadow-md shadow-emerald-500/20 transition-all disabled:opacity-50 cursor-pointer"
+                    disabled={isSavingPolicy || !hasPolicyChanges}
+                    className={`px-4 py-2 font-bold text-xs rounded-xl flex items-center space-x-1.5 transition-all ${
+                      hasPolicyChanges && !isSavingPolicy
+                        ? 'bg-emerald-500 hover:bg-emerald-400 text-slate-950 shadow-md shadow-emerald-500/20 cursor-pointer'
+                        : 'bg-slate-800 text-slate-500 border border-slate-700/60 cursor-not-allowed opacity-60'
+                    }`}
+                    title={hasPolicyChanges ? 'Save modified changes' : 'No changes to save'}
                   >
                     {isSavingPolicy ? (
                       <>
                         <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-                        <span>Updating...</span>
+                        <span>Saving...</span>
                       </>
                     ) : (
                       <>
                         <Check className="w-3.5 h-3.5" />
-                        <span>Save Policy Changes</span>
+                        <span>Save</span>
                       </>
                     )}
                   </button>
                 </div>
               </div>
 
+              {/* Form Status Bar */}
+              {(() => {
+                const intake = getPolicyIntakeStatus(activePolicyForm);
+                return (
+                  <div className="p-3.5 bg-slate-950/70 border border-slate-800 rounded-xl space-y-2">
+                    <div className="flex items-center justify-between text-xs">
+                      <div className="flex items-center space-x-2">
+                        <span className="text-slate-400 font-semibold">Intake Completion:</span>
+                        <span className={`font-mono font-bold ${activePolicyForm.status === 'ACTIVE' || intake.isReady ? 'text-emerald-400' : 'text-amber-400'}`}>
+                          {activePolicyForm.status === 'ACTIVE' ? '100% Active' : `${intake.percent}% (${intake.label})`}
+                        </span>
+                      </div>
+                      <span className="text-[11px] text-slate-400">
+                        {activePolicyForm.status === 'ACTIVE'
+                          ? 'This policy is fully active and confirmed.'
+                          : intake.isReady
+                          ? 'All required details are in place. Ready to activate!'
+                          : 'Chat with AI Advisor or fill in details below to complete.'}
+                      </span>
+                    </div>
+                    <div className="w-full h-1.5 bg-slate-800 rounded-full overflow-hidden">
+                      <div
+                        className={`h-full rounded-full transition-all duration-500 ${
+                          activePolicyForm.status === 'ACTIVE'
+                            ? 'bg-gradient-to-r from-emerald-500 to-teal-400 shadow-[0_0_8px_rgba(16,185,129,0.5)]'
+                            : intake.isReady
+                            ? 'bg-gradient-to-r from-emerald-500 to-teal-400'
+                            : 'bg-gradient-to-r from-amber-500 to-yellow-400'
+                        }`}
+                        style={{ width: `${activePolicyForm.status === 'ACTIVE' ? 100 : Math.max(intake.percent, 25)}%` }}
+                      />
+                    </div>
+                  </div>
+                );
+              })()}
+
               {/* Policy Intake & Coverage Details Form Grid */}
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-xs">
-                <div>
-                  <label className="block text-slate-400 font-semibold mb-1.5">
-                    1. Insurance Category *
-                  </label>
-                  <select
-                    value={activePolicyForm.insuranceType || 'HEALTH'}
-                    onChange={(e) => setActivePolicyForm((p) => ({ ...p, insuranceType: e.target.value }))}
-                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-white focus:outline-none focus:border-emerald-500 transition-all"
-                  >
-                    <option value="HEALTH">Health & Medical</option>
-                    <option value="AUTO">Car & Motor</option>
-                    <option value="HOME">Home & Property</option>
-                    <option value="LIFE">Term Life</option>
-                    <option value="ACCIDENT">Personal Accident</option>
-                    <option value="AGRICULTURE">Agriculture Cover</option>
-                    <option value="TRAVEL">Travel Insurance</option>
-                    <option value="COMMERCIAL">Commercial & Business</option>
-                    <option value="OTHER">Other</option>
-                  </select>
-                </div>
+              {(() => {
+                const categoryConfig = getCategoryFormConfig(activePolicyForm.insuranceType);
+                return (
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-xs">
+                    <div>
+                      <label className="block text-slate-400 font-semibold mb-1.5">
+                        1. Insurance Category *
+                      </label>
+                      <select
+                        value={activePolicyForm.insuranceType || 'HEALTH'}
+                        onChange={(e) => setActivePolicyForm((p) => ({ ...p, insuranceType: e.target.value }))}
+                        className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-white focus:outline-none focus:border-emerald-500 transition-all"
+                      >
+                        <option value="AUTO">Car & Motor</option>
+                        <option value="HEALTH">Health & Medical</option>
+                        <option value="HOME">Home & Property</option>
+                        <option value="LIFE">Term Life</option>
+                        <option value="COMMERCIAL">Commercial & Business</option>
+                        <option value="ACCIDENT">Personal Accident</option>
+                        <option value="AGRICULTURE">Agriculture Cover</option>
+                        <option value="TRAVEL">Travel Insurance</option>
+                        <option value="LIABILITY">Liability (D&O / E&O)</option>
+                        <option value="GENERAL">General Insurance</option>
+                      </select>
+                    </div>
 
-                <div>
-                  <label className="block text-slate-400 font-semibold mb-1.5">
-                    2. Who Is Taking / Covered *
-                  </label>
-                  <select
-                    value={activePolicyForm.whoIsInsured || ''}
-                    onChange={(e) => setActivePolicyForm((p) => ({ ...p, whoIsInsured: e.target.value }))}
-                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-white focus:outline-none focus:border-emerald-500 transition-all"
-                  >
-                    <option value="">— Select / Unspecified —</option>
-                    <option value="SELF">Self</option>
-                    <option value="FATHER">Father</option>
-                    <option value="MOTHER">Mother</option>
-                    <option value="PARENTS">Parents</option>
-                    <option value="SPOUSE">Spouse</option>
-                    <option value="CHILD">Child</option>
-                    <option value="SON">Son</option>
-                    <option value="DAUGHTER">Daughter</option>
-                    <option value="FAMILY">Family (Floater)</option>
-                    <option value="BUSINESS">Business</option>
-                    <option value="ASSET">Asset / Vehicle / Property</option>
-                    <option value="OTHER">Other</option>
-                  </select>
-                </div>
+                    <div>
+                      <label className="block text-slate-400 font-semibold mb-1.5">
+                        2. Who Is Taking / Covered *
+                      </label>
+                      <select
+                        value={activePolicyForm.whoIsInsured || ''}
+                        onChange={(e) => setActivePolicyForm((p) => ({ ...p, whoIsInsured: e.target.value }))}
+                        className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-white focus:outline-none focus:border-emerald-500 transition-all"
+                      >
+                        <option value="">— Select / Unspecified —</option>
+                        <option value="SELF">Self</option>
+                        <option value="FATHER">Father</option>
+                        <option value="MOTHER">Mother</option>
+                        <option value="PARENTS">Parents</option>
+                        <option value="SPOUSE">Spouse</option>
+                        <option value="CHILD">Child</option>
+                        <option value="SON">Son</option>
+                        <option value="DAUGHTER">Daughter</option>
+                        <option value="FAMILY">Family (Floater)</option>
+                        <option value="BUSINESS">Business</option>
+                        <option value="ASSET">Asset / Vehicle / Property</option>
+                        <option value="OTHER">Other</option>
+                      </select>
+                    </div>
 
-                <div>
-                  <label className="block text-slate-400 font-semibold mb-1.5">
-                    3. Insured Person Full Name
-                  </label>
-                  <input
-                    type="text"
-                    value={activePolicyForm.insuredName || ''}
-                    onChange={(e) => setActivePolicyForm((p) => ({ ...p, insuredName: e.target.value }))}
-                    placeholder="e.g. Ramesh Nair"
-                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-white placeholder-slate-600 focus:outline-none focus:border-emerald-500 transition-all"
-                  />
-                </div>
+                    <div>
+                      <label className="block text-slate-400 font-semibold mb-1.5">
+                        3. Insured Person Full Name
+                      </label>
+                      <input
+                        type="text"
+                        value={activePolicyForm.insuredName || ''}
+                        onChange={(e) => setActivePolicyForm((p) => ({ ...p, insuredName: e.target.value }))}
+                        placeholder="e.g. Ramesh Nair"
+                        className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-white placeholder-slate-600 focus:outline-none focus:border-emerald-500 transition-all"
+                      />
+                    </div>
 
-                <div>
-                  <label className="block text-slate-400 font-semibold mb-1.5">
-                    4. Covered Person Age
-                  </label>
-                  <input
-                    type="number"
-                    value={activePolicyForm.coveredAge ?? ''}
-                    onChange={(e) => setActivePolicyForm((p) => ({ ...p, coveredAge: e.target.value }))}
-                    placeholder="e.g. 64"
-                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-white placeholder-slate-600 focus:outline-none focus:border-emerald-500 transition-all"
-                  />
-                </div>
+                    <div>
+                      <label className="block text-slate-400 font-semibold mb-1.5">
+                        {categoryConfig.ageLabel}
+                      </label>
+                      <input
+                        type="number"
+                        value={activePolicyForm.coveredAge ?? ''}
+                        onChange={(e) => setActivePolicyForm((p) => ({ ...p, coveredAge: e.target.value }))}
+                        placeholder={categoryConfig.agePlaceholder}
+                        className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-white placeholder-slate-600 focus:outline-none focus:border-emerald-500 transition-all"
+                      />
+                    </div>
 
-                <div className="md:col-span-2">
-                  <label className="block text-slate-400 font-semibold mb-1.5">
-                    5. Health Conditions / Specific Risks
-                  </label>
-                  <input
-                    type="text"
-                    value={activePolicyForm.healthOrRiskConditions || ''}
-                    onChange={(e) =>
-                      setActivePolicyForm((p) => ({ ...p, healthOrRiskConditions: e.target.value }))
-                    }
-                    placeholder="e.g. Type 2 diabetes, Hypertension, or None"
-                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-white placeholder-slate-600 focus:outline-none focus:border-emerald-500 transition-all"
-                  />
-                </div>
+                    <div className="md:col-span-2">
+                      <label className="block text-slate-400 font-semibold mb-1.5">
+                        {categoryConfig.detailLabel}
+                      </label>
+                      <input
+                        type="text"
+                        value={activePolicyForm.healthOrRiskConditions || ''}
+                        onChange={(e) =>
+                          setActivePolicyForm((p) => ({ ...p, healthOrRiskConditions: e.target.value }))
+                        }
+                        placeholder={categoryConfig.detailPlaceholder}
+                        className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-white placeholder-slate-600 focus:outline-none focus:border-emerald-500 transition-all"
+                      />
+                    </div>
 
-                <div>
-                  <label className="block text-slate-400 font-semibold mb-1.5">
-                    Policy / Plan Title *
-                  </label>
-                  <input
-                    type="text"
-                    required
-                    value={activePolicyForm.policyName || ''}
-                    onChange={(e) => setActivePolicyForm((p) => ({ ...p, policyName: e.target.value }))}
-                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-white focus:outline-none focus:border-emerald-500 transition-all"
-                  />
-                </div>
+                    <div>
+                      <label className="block text-slate-400 font-semibold mb-1.5">
+                        Policy / Plan Title *
+                      </label>
+                      <input
+                        type="text"
+                        required
+                        value={activePolicyForm.policyName || ''}
+                        onChange={(e) => setActivePolicyForm((p) => ({ ...p, policyName: e.target.value }))}
+                        className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-white focus:outline-none focus:border-emerald-500 transition-all"
+                      />
+                    </div>
 
-                <div>
-                  <label className="block text-slate-400 font-semibold mb-1.5">
-                    Sum Insured / Coverage Limit
-                  </label>
-                  <input
-                    type="text"
-                    value={activePolicyForm.sumInsured || ''}
-                    onChange={(e) => setActivePolicyForm((p) => ({ ...p, sumInsured: e.target.value }))}
-                    placeholder="e.g. £150,000"
-                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-white placeholder-slate-600 focus:outline-none focus:border-emerald-500 transition-all font-mono"
-                  />
-                </div>
+                    <div>
+                      <label className="block text-slate-400 font-semibold mb-1.5">
+                        Sum Insured / Coverage Limit
+                      </label>
+                      <input
+                        type="text"
+                        value={activePolicyForm.sumInsured || ''}
+                        onChange={(e) => setActivePolicyForm((p) => ({ ...p, sumInsured: e.target.value }))}
+                        placeholder="e.g. £150,000"
+                        className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-white placeholder-slate-600 focus:outline-none focus:border-emerald-500 transition-all font-mono"
+                      />
+                    </div>
 
-                <div>
-                  <label className="block text-slate-400 font-semibold mb-1.5">
-                    Monthly Premium
-                  </label>
-                  <input
-                    type="text"
-                    value={activePolicyForm.premium || ''}
-                    onChange={(e) => setActivePolicyForm((p) => ({ ...p, premium: e.target.value }))}
-                    placeholder="e.g. £132/month"
-                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-white placeholder-slate-600 focus:outline-none focus:border-emerald-500 transition-all font-mono"
-                  />
-                </div>
+                    <div>
+                      <label className="block text-slate-400 font-semibold mb-1.5">
+                        Monthly Premium
+                      </label>
+                      <input
+                        type="text"
+                        value={activePolicyForm.premium || ''}
+                        onChange={(e) => setActivePolicyForm((p) => ({ ...p, premium: e.target.value }))}
+                        placeholder="e.g. £132/month"
+                        className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-white placeholder-slate-600 focus:outline-none focus:border-emerald-500 transition-all font-mono"
+                      />
+                    </div>
 
-                <div>
-                  <label className="block text-slate-400 font-semibold mb-1.5">
-                    Policy Term / Duration
-                  </label>
-                  <input
-                    type="text"
-                    value={activePolicyForm.policyTerm || ''}
-                    onChange={(e) => setActivePolicyForm((p) => ({ ...p, policyTerm: e.target.value }))}
-                    placeholder="e.g. 1 Year"
-                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-white placeholder-slate-600 focus:outline-none focus:border-emerald-500 transition-all"
-                  />
-                </div>
+                    <div>
+                      <label className="block text-slate-400 font-semibold mb-1.5">
+                        Policy Term / Duration
+                      </label>
+                      <input
+                        type="text"
+                        value={activePolicyForm.policyTerm || ''}
+                        onChange={(e) => setActivePolicyForm((p) => ({ ...p, policyTerm: e.target.value }))}
+                        placeholder="e.g. 1 Year"
+                        className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-white placeholder-slate-600 focus:outline-none focus:border-emerald-500 transition-all"
+                      />
+                    </div>
 
-                <div>
-                  <label className="block text-slate-400 font-semibold mb-1.5">
-                    Nominee Full Name
-                  </label>
-                  <input
-                    type="text"
-                    value={activePolicyForm.nomineeName || ''}
-                    onChange={(e) => setActivePolicyForm((p) => ({ ...p, nomineeName: e.target.value }))}
-                    placeholder="Nominee Full Name"
-                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-white placeholder-slate-600 focus:outline-none focus:border-emerald-500 transition-all"
-                  />
-                </div>
+                    <div>
+                      <label className="block text-slate-400 font-semibold mb-1.5">
+                        Nominee Full Name
+                      </label>
+                      <input
+                        type="text"
+                        value={activePolicyForm.nomineeName || ''}
+                        onChange={(e) => setActivePolicyForm((p) => ({ ...p, nomineeName: e.target.value }))}
+                        placeholder="Nominee Full Name"
+                        className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-white placeholder-slate-600 focus:outline-none focus:border-emerald-500 transition-all"
+                      />
+                    </div>
 
-                <div>
-                  <label className="block text-slate-400 font-semibold mb-1.5">
-                    Nominee Relationship
-                  </label>
-                  <input
-                    type="text"
-                    value={activePolicyForm.nomineeRelationship || ''}
-                    onChange={(e) =>
-                      setActivePolicyForm((p) => ({ ...p, nomineeRelationship: e.target.value }))
-                    }
-                    placeholder="e.g. Spouse, Child, Father"
-                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-white placeholder-slate-600 focus:outline-none focus:border-emerald-500 transition-all"
-                  />
-                </div>
-              </div>
+                    <div>
+                      <label className="block text-slate-400 font-semibold mb-1.5">
+                        Nominee Relationship
+                      </label>
+                      <input
+                        type="text"
+                        value={activePolicyForm.nomineeRelationship || ''}
+                        onChange={(e) =>
+                          setActivePolicyForm((p) => ({ ...p, nomineeRelationship: e.target.value }))
+                        }
+                        placeholder="e.g. Spouse, Child, Father"
+                        className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-white placeholder-slate-600 focus:outline-none focus:border-emerald-500 transition-all"
+                      />
+                    </div>
+                  </div>
+                );
+              })()}
+
+              {/* Form Footer Action Bar (Bottom Right Confirm Button Only) */}
+              {(() => {
+                const intake = getPolicyIntakeStatus(activePolicyForm);
+                return (
+                  <div className="pt-4 border-t border-slate-800/80 flex flex-col sm:flex-row items-center justify-between gap-3">
+                    <div className="text-xs text-slate-400 flex items-center space-x-2">
+                      {activePolicyForm.status === 'ACTIVE' ? (
+                        <span className="inline-flex items-center space-x-1.5 text-emerald-400 font-semibold">
+                          <CheckCircle2 className="w-4 h-4 text-emerald-400" />
+                          <span>This policy is fully active and confirmed.</span>
+                        </span>
+                      ) : intake.isReady ? (
+                        <span className="inline-flex items-center space-x-1.5 text-emerald-400 font-semibold">
+                          <CheckCircle2 className="w-4 h-4 text-emerald-400" />
+                          <span>All required intake details are complete! Ready to activate.</span>
+                        </span>
+                      ) : (
+                        <span className="inline-flex items-center space-x-1.5 text-amber-400/90 font-medium">
+                          <AlertCircle className="w-4 h-4 text-amber-400 shrink-0" />
+                          <span>
+                            Missing details: <strong className="text-amber-300">{intake.missing.join(', ')}</strong>. Complete them to enable activation.
+                          </span>
+                        </span>
+                      )}
+                    </div>
+
+                    <div className="flex items-center space-x-3 w-full sm:w-auto justify-end">
+                      {activePolicyForm.status === 'PENDING' && (
+                        <button
+                          type="button"
+                          onClick={() => handleConfirmAndActivatePolicy(activePolicyForm)}
+                          disabled={!intake.isReady || isSavingPolicy}
+                          className={`px-5 py-2.5 font-bold text-xs rounded-xl flex items-center space-x-2 transition-all ${
+                            intake.isReady && !isSavingPolicy
+                              ? 'bg-gradient-to-r from-emerald-500 to-teal-400 hover:from-emerald-400 hover:to-teal-300 text-slate-950 shadow-lg shadow-emerald-500/25 hover:shadow-emerald-500/40 hover:scale-105 active:scale-95 cursor-pointer'
+                              : 'bg-slate-800/80 text-slate-500 border border-slate-700/50 cursor-not-allowed opacity-60'
+                          }`}
+                          title={
+                            intake.isReady
+                              ? 'Confirm all details and activate this policy'
+                              : `Please complete missing details (${intake.missing.join(', ')}) to activate`
+                          }
+                        >
+                          <CheckCircle2
+                            className={`w-4 h-4 ${
+                              intake.isReady ? 'text-slate-950 fill-emerald-300' : 'text-slate-500'
+                            }`}
+                          />
+                          <span>Confirm & Activate Policy</span>
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                );
+              })()}
             </form>
           )}
         </main>

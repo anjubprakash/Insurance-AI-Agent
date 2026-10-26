@@ -1,948 +1,699 @@
-import mongoose from 'mongoose';
-import { getGroqClient } from './aiProvider.service.js';
-import { searchSimilarPolicyClauses } from './vectorStore.service.js';
-import { PolicyOffer } from '../models/policyOffer.model.js';
-import { PolicyDetail } from '../models/policyDetail.model.js';
-import { User } from '../models/user.model.js';
-import { authService } from './auth.service.js';
-import { formatPolicyOfferText } from './policyOffer.service.js';
-import { env } from '../config/env.js';
-
-export const PRIORITY_SLOTS = [
-  'insuranceType',
-  'whoIsInsured',
-  'insuredName',
-  'coveredAge',
-  'healthOrRiskConditions'
-];
+import mongoose from "mongoose";
+import { getGroqClient } from "./aiProvider.service.js";
+import { searchSimilarPolicyClauses } from "./vectorStore.service.js";
+import { PolicyOffer } from "../models/policyOffer.model.js";
+import { PolicyDetail } from "../models/policyDetail.model.js";
+import { User } from "../models/user.model.js";
+import { policyDetailService } from "./policyDetail.service.js";
+import { authService } from "./auth.service.js";
+import { env } from "../config/env.js";
 
 export const formatAmount = (val) => {
-  if (!val) return 'Not specified';
+  if (!val) return "Not specified";
   const str = String(val).trim();
-  return /^\d+(\.\d+)?$/.test(str) ? `£${Number(str).toLocaleString('en-GB')}` : str;
+  return /^\d+(\.\d+)?$/.test(str)
+    ? `£${Number(str).toLocaleString("en-GB")}`
+    : str;
 };
 
-// Beneficiary & relationship synonym mapping for normalized storage
-const WHO_SYNONYM_MAP = {
-  DAD: 'FATHER', PAPA: 'FATHER', DADDY: 'FATHER',
-  MOM: 'MOTHER', MUM: 'MOTHER', MAMA: 'MOTHER', MUMMY: 'MOTHER',
-  PARENT: 'PARENTS',
-  BOY: 'SON',
-  GIRL: 'DAUGHTER',
-  KID: 'CHILD', CHILDREN: 'CHILD', KIDS: 'CHILD',
-  WIFE: 'SPOUSE', HUSBAND: 'SPOUSE', PARTNER: 'SPOUSE',
-  BRO: 'BROTHER',
-  SIS: 'SISTER',
-  SIBLINGS: 'SIBLING',
-  GRANDPA: 'GRANDFATHER', GRANDDAD: 'GRANDFATHER',
-  GRANDMA: 'GRANDMOTHER', GRANNY: 'GRANDMOTHER',
-  GRANDPARENTS: 'GRANDPARENT',
-  ME: 'SELF', MYSELF: 'SELF', OWN: 'SELF',
-  COMPANY: 'BUSINESS', PARTNERSHIP: 'BUSINESS', VENTURE: 'BUSINESS', STARTUP: 'BUSINESS', FIRM: 'BUSINESS', ENTERPRISE: 'BUSINESS'
-};
-
-// Helper: robust Groq completion with exponential backoff on 429 rate limit
-const createGroqCompletionWithRetry = async (groq, params, maxAttempts = 3) => {
+// Robust Groq completion with exponential backoff on 429
+const callGroqWithRetry = async (groq, params, maxAttempts = 3) => {
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     try {
       return await groq.chat.completions.create(params);
-    } catch (apiErr) {
-      const isRateLimited = apiErr.status === 429 || String(apiErr.message).includes('429');
-      if (attempt < maxAttempts && isRateLimited) {
-        await new Promise((resolve) => setTimeout(resolve, 2000 * attempt));
+    } catch (err) {
+      if (
+        attempt < maxAttempts &&
+        (err.status === 429 || String(err.message).includes("429"))
+      ) {
+        await new Promise((r) => setTimeout(r, 1500 * attempt));
         continue;
       }
-      throw apiErr;
+      throw err;
     }
   }
 };
 
-//This function sends the user's message and recent conversation history to the LLM to understand the user's meaning and return structured information 
-export const classifyAndContextualizeWithAI = async ({
-  question = '',
-  conversationHistory = [],
-  policyTypeFilter = null
-}) => {
-  const trimmed = (question || '').trim();
-  if (!trimmed) {
-    return {
-      intent: 'GENERAL_INQUIRY',
-      isPersonalIntakeOrAction: false,
-      isConversationalFollowUp: false,
-      detectedCategory: policyTypeFilter && policyTypeFilter !== 'ALL' ? policyTypeFilter : 'GENERAL',
-      selectedPlanName: null,
-      standaloneSearchQuery: ''
-    };
-  }
+const SYSTEM_PROMPT = `You are an expert, empathetic, and authoritative AI Insurance Advisor powered by advanced Natural Language Processing (NLP).
+You understand user intent, insurance domains, conversational context, and underwriting requirements naturally without rigid keyword scripts.
 
-  try {
-    const groq = getGroqClient();
-    const recentHistory = (conversationHistory || []).slice(-8);
+CUSTOMER IDENTITY & PERSONALIZATION RULES (STRICT):
+1. The customer's registered account name is provided in the prompt as "Customer Name".
+   - You must ONLY use this exact name (e.g. if the name is "user4", greet as "user4" or use a warm polite greeting).
+   - NEVER invent, assume, or substitute names (e.g. NEVER call them "Alex", "John", etc.).
+2. Ground Truth & Policy Numbers:
+   - Consult RECORDED ENROLLED POLICIES GROUND TRUTH to see what policies the customer currently has on file.
+   - If Ground Truth states the customer has NO active enrolled policies, you MUST NOT invent, assume, cite, or hallucinate any policy numbers (#POL-...). NEVER mention fast-tracking non-existent or pending policies!
+3. Budget & Premium Integrity:
+   - NEVER invent or hallucinate an arbitrary budget for the customer (e.g. do NOT invent "within your £24-£30 per month budget" unless the customer explicitly stated that budget).
+   - If the customer specifies a budget (e.g. "£20-£25/month"), only discuss plans that match or fit closely with that budget. Never suggest plans that cost double or quadruple their stated budget.
+4. CATALOG LIMITATION & NO-MATCH HONESTY (CRITICAL):
+   - You can ONLY recommend policies that actually exist in the RELEVANT POLICIES IN KNOWLEDGE BASE.
+   - If a customer asks for an asset type, vehicle type, or coverage that does NOT exist in our catalog (e.g. asking for two-wheeler / motorbike / motorcycle / scooter insurance when the catalog only contains car, van, or fleet policies):
+     * State directly, simply, and truthfully: "We currently do not offer two-wheeler (motorbike/motorcycle) insurance in our catalog. Our motor insurance plans currently cover four-wheeled passenger cars and commercial fleets."
+     * Do NOT invent fake next steps: NEVER say "I will forward your profile to our underwriting team in 24-48 hours" or "upload your documents in Profile for a custom quote". There is no offline underwriting queue.
+     * Do NOT recommend irrelevant policies:
+       - Set "isReadyForRecommendations": false.
+       - Set "recommendedPlanCodes": [].
+       - NEVER recommend car policies, electric car policies, or commercial fleet policies for a motorcycle/bike inquiry!
+       - If no relevant policies exist for what the user is asking, state that clearly and show NO cards.
 
-    const systemPrompt = `You are an AI Insurance Intent Classifier & Query Contextualizer.
-Analyze the user's latest message with ongoing conversation history.
-Determine:
-1. "intent":
-   - "GENERAL_INQUIRY": Asking questions, exploring options, how insurance works, comparing plans, coverage limits, costs, exclusions.
-   - "INTAKE_ANSWER": Providing customer intake details (names, ages, family roles, health conditions, medical history, business description, vehicle/home details).
-   - "PLAN_SELECTION": Explicitly selecting, choosing, or enrolling in a specific plan or option (e.g. "Select Meadow Senior Care", "Option 2", "I pick this plan").
-2. "isPersonalIntakeOrAction": boolean.
-   - Set to TRUE if user provides personal/business intake details to be recorded (names, ages, health conditions, entity details) OR selects a plan.
-   - Set to FALSE if user asks advisory/informational questions (e.g. how insurance works, options, comparing plans, benefits, costs, exclusions).
-3. "isConversationalFollowUp": boolean (true if turn relies on prior context/pronouns).
-4. "detectedCategory": "COMMERCIAL" | "HEALTH" | "AUTO" | "HOME" | "LIFE" | "ACCIDENT" | "AGRICULTURE" | "TRAVEL" | "GENERAL".
-5. "selectedPlanName": Plan name/option if user is selecting/choosing a plan, else null.
-6. "standaloneSearchQuery": Fully resolved standalone query for vector retrieval resolving pronouns and short answers.
+INSURANCE DOMAINS KNOWLEDGE SPECIFICATION (10 CATEGORIES):
 
-Respond strictly in JSON:
+1. AUTO (Motor Insurance):
+   - Conversational Parameters (Ask naturally in chat for quotes):
+     * Driver's age
+     * Vehicle make, model, variant, and manufacturing year
+     * Coverage type needed (Comprehensive vs Third-Party)
+     * Primary usage (personal daily commute vs commercial) and driving history / claims / NCB %
+   - Sensitive KYC / Official Documents (NEVER ask to paste in chat; direct user to Profile):
+     * Vehicle Registration Certificate (RC copy), Engine & Chassis numbers, inspection photos/videos.
+     * Guidance: Tell the customer to securely upload and complete official vehicle documents under their Profile.
+
+2. HEALTH:
+   - Conversational Parameters (Ask naturally in chat for quotes):
+     * Exact age and gender of all members to be covered
+     * Pre-existing medical conditions (diabetes, hypertension, asthma, past surgeries, or explicit confirmation of "None")
+     * Basic lifestyle habits (smoking, tobacco consumption)
+     * Existing health cover or preferred hospital room/cover amount
+   - Sensitive KYC / Official Documents (NEVER ask to paste in chat; direct user to Profile):
+     * Identity and address proofs (Aadhaar, PAN, Passport), past medical discharge summaries, diagnostic checkup reports.
+     * Guidance: Instruct customer to safely upload identity proofs and clinical reports in their Profile.
+
+3. HOME:
+   - Conversational Parameters:
+     * Property type (independent house, flat/apartment, villa) and age of building
+     * Number of bedrooms / approximate square footage and general location
+     * Coverage needed (building structure only, contents only, or combined)
+     * Basic security measures (burglar alarm, fire extinguisher, gated community)
+   - Sensitive KYC / Official Documents:
+     * Sale deed, property tax receipts, floor plan/valuation certificates, property photos (direct to Profile).
+
+4. LIFE:
+   - Conversational Parameters:
+     * Insured person's age
+     * Smoking/tobacco status and general health status
+     * Broad annual income range and occupation type
+     * Nominee relation and desired coverage term / sum assured
+   - Sensitive KYC / Official Documents:
+     * Aadhaar, Passport, Salary slips, Form 16, ITR copies, diagnostic blood/ECG reports (direct to Profile).
+
+5. COMMERCIAL:
+   - Conversational Parameters:
+     * Nature of business operations / industry trade
+     * Estimated annual turnover range and employee headcount
+     * Core coverage needed (public liability, stock/machinery, professional indemnity, fleet)
+   - Sensitive KYC / Official Documents:
+     * GSTIN, PAN, incorporation certificate, trade license, audited balance sheets, safety audit clearances (direct to Profile).
+
+6. ACCIDENT (Personal Accident):
+   - Conversational Parameters:
+     * Insured age and occupation risk classification (desk job vs heavy machinery/field)
+     * Pre-existing physical disabilities or impairments
+     * Desired accidental death and permanent disability cover
+   - Sensitive KYC / Official Documents:
+     * Government ID proofs, Nominee official ID proofs (direct to Profile).
+
+7. AGRICULTURE (Crop / Farm):
+   - Conversational Parameters:
+     * Type of crop cultivated and approximate farm area (acreage)
+     * Sowing timeline and irrigation source (rainfed vs canal/borewell)
+   - Sensitive KYC / Official Documents:
+     * Land title deed (Khata, 7/12 extract), sowing certificate from patwari/panchayat, bank account details for direct subsidies (direct to Profile).
+
+8. TRAVEL:
+   - Conversational Parameters:
+     * Destination country/countries
+     * Travel dates / trip duration
+     * Traveler age and any pre-existing medical conditions
+     * Purpose (leisure, business, or adventure sports)
+   - Sensitive KYC / Official Documents:
+     * Passport copies, visa copies, flight tickets/boarding passes (direct to Profile).
+
+9. LIABILITY (Directors & Officers / E&O / General Liability):
+   - Conversational Parameters:
+     * Scope of professional services or product lines manufactured
+     * Geographic spread of operations (domestic vs international exports)
+     * Prior claims or known dispute circumstances
+   - Sensitive KYC / Official Documents:
+     * Standard client contracts, corporate incorporation records, audited financial statements (direct to Profile).
+
+10. GENERAL:
+   - Conversational Parameters:
+     * Precise description of asset or event being insured
+     * Duration of coverage needed and desired deductible/excess
+   - Sensitive KYC / Official Documents:
+     * Purchase invoices, valuation certificates, customs documentation (direct to Profile).
+
+CORE CONVERSATIONAL RECOMMENDATION READINESS RULES:
+1. RECOMMENDATION UNLOCKING & EXPLORATION GUIDANCE (CRITICAL):
+   - Recommendations are UNLOCKED ("isReadyForRecommendations": true) ONLY IF:
+     1. The user has shared their basic conversational parameters for that category (e.g. for AUTO: driver age AND vehicle details; for HEALTH: age AND basic health status; for ACCIDENT: age AND occupation/risk level; for LIFE: age AND broad occupation).
+     AND
+     2. RELEVANT POLICIES IN KNOWLEDGE BASE actually contains matching policies for that specific asset/vehicle type!
+   - CATALOG LIMITATION / UNSUPPORTED SUBTYPES (e.g. Two-Wheelers / Motorbikes):
+     * If the customer asks for an asset or vehicle type not covered in the catalog (e.g. they ask for two-wheeler / motorbike / motorcycle / scooter, but the catalog only contains car policies):
+       - "isReadyForRecommendations" MUST BE FALSE!
+       - "recommendedPlanCodes" MUST BE EMPTY []!
+       - In "answer", directly, simply, and honestly inform the user: "We currently do not offer two-wheeler (motorbike/motorcycle) insurance in our catalog. Our auto insurance plans currently cover four-wheeled passenger cars and commercial fleets."
+       - That is ALL. NEVER invent fake processes (e.g. NEVER say "I will forward your profile to our underwriting team in 24-48 hours", and NEVER tell them to upload documents in Profile for a quote we do not offer).
+   - UNDECIDED OR EXPLORING CUSTOMERS (When matching policies exist):
+     * If a customer shares their basic profile (e.g., 25-year-old truck driver, healthy / no body problems) and asks "what coverage options do you have?", "what plans are available?", "show me options", or asks for advice on what to choose:
+     * "isReadyForRecommendations" MUST BE TRUE!
+     * "recommendedPlanCodes" MUST BE POPULATED with matching policy reference codes from RELEVANT POLICIES IN KNOWLEDGE BASE.
+     * In "answer", present and compare the available coverage tiers from the catalog so the customer can immediately review their options.
+     * DO NOT block recommendations or interrogate the customer to guess an exact sum-insured figure when they are asking what options you offer.
+     * DO NOT re-ask questions the customer already answered (e.g. "no problem with my body" means pre-existing conditions are NONE).
+     * NEVER invent or assume an arbitrary budget (e.g., do NOT invent "within your £24-£30 budget" unless the customer explicitly specified that budget).
+2. ONLY BLOCK RECOMMENDATIONS WHEN CUSTOMER PROVIDED ZERO CONTEXT:
+   - "isReadyForRecommendations" MUST BE FALSE ONLY IF the customer asks for recommendations (e.g. "give me recommendations", "show me plans") without providing ANY background context (no age, no category details, no occupation/vehicle).
+   - In that zero-context case:
+     * "isReadyForRecommendations": false.
+     * "recommendedPlanCodes": [].
+     * Politely explain that you will gladly display matching recommendations, and ask the 2-3 essential conversational parameters to tailor the quote.
+3. SENSITIVE KYC & DOCUMENT PRIVACY (CRITICAL):
+   - If the customer mentions or asks about sharing sensitive identity proofs, official documents, or financial records (such as Aadhaar, PAN, RC copies, engine/chassis numbers, bank details, tax returns):
+     * Set "sensitiveDocsNoticeNeeded": true.
+     * Warmly advise them: "For your privacy and security, please do not share confidential documents like Aadhaar, PAN, or RC details in this chat. You can safely complete and upload those in your Profile & Documents page."
+4. GROUND TRUTH (EXISTING DATABASE POLICIES):
+   - Consult RECORDED ENROLLED POLICIES GROUND TRUTH to understand what policies the customer already has on file.
+   - Never re-ask for details already saved in Ground Truth.
+5. DEDICATED TARGET POLICY FOCUS:
+   - If a TARGET POLICY FOCUS is present, the user is having a 1-on-1 discussion about that specific plan. Address coverage, limits, premiums, and claims specifically for that plan.
+
+STRICT JSON OUTPUT FORMAT:
 {
-  "intent": "GENERAL_INQUIRY" | "INTAKE_ANSWER" | "PLAN_SELECTION",
-  "isPersonalIntakeOrAction": false,
-  "isConversationalFollowUp": false,
-  "detectedCategory": "COMMERCIAL" | "HEALTH" | "AUTO" | "HOME" | "LIFE" | "ACCIDENT" | "AGRICULTURE" | "TRAVEL" | "GENERAL",
-  "selectedPlanName": null,
-  "standaloneSearchQuery": "string"
+  "detectedInsuranceType": "AUTO" | "HEALTH" | "HOME" | "LIFE" | "COMMERCIAL" | "ACCIDENT" | "AGRICULTURE" | "TRAVEL" | "LIABILITY" | "GENERAL",
+  "extractedProfile": {
+    "whoIsInsured": "SELF" | "SPOUSE" | "PARENTS" | "BUSINESS" | "CHILD" | "FAMILY",
+    "insuredName": "Full name or business name",
+    "coveredAge": null,
+    "healthOrRiskConditions": "Category-specific details (e.g. 2022 Honda Civic, diabetes status, 3-bed flat)",
+    "sumInsured": "Coverage limit or tier",
+    "selectedPlanName": null
+  },
+  "missingRequiredFields": ["list of missing conversational parameters"],
+  "isReadyForRecommendations": false,
+  "sensitiveDocsNoticeNeeded": false,
+  "answer": "Warm, natural, and clear response generated entirely by you (use bullet points, zero rigid scripts, zero bulky tables).",
+  "recommendedPlanCodes": []
 }`;
 
-    const messages = [
-      { role: 'system', content: systemPrompt },
-      ...recentHistory.map((h) => ({
-        role: h.role === 'user' ? 'user' : 'assistant',
-        content: typeof h.content === 'string' ? h.content.slice(0, 300) : ''
-      })),
-      { role: 'user', content: trimmed }
-    ];
+// Grounded Intelligent Recommendations Engine (Strict Category Isolation & Relevance Ranking)
+// Displays ONLY policies from the requested category. Zero cross-category backfill.
+// Ranks the most related policies to the user's specific profile at the top.
+export const getIntelligentRecommendations = async ({
+  category,
+  intakeData = {},
+  allActiveOffers = [],
+  recommendedPlanCodes = [],
+  targetOffer = null,
+  limit = 6,
+}) => {
+  if (targetOffer) return [];
 
-    const completion = await createGroqCompletionWithRetry(groq, {
-      model: env.GROQ_MODEL,
-      messages,
-      temperature: 0.1,
-      max_tokens: 800,
-      response_format: { type: 'json_object' }
-    });
-//category finding 
-    const parsed = JSON.parse(completion.choices[0]?.message?.content || '{}');
-    const validCategories = ['COMMERCIAL', 'HEALTH', 'AUTO', 'HOME', 'LIFE', 'ACCIDENT', 'AGRICULTURE', 'TRAVEL', 'GENERAL'];
-    // Checks whether the AI returned a valid category. If not, it uses the selected policyTypeFilter or defaults to GENERAL
-    const detectedCategory = validCategories.includes((parsed.detectedCategory || '').toUpperCase())
-      ? parsed.detectedCategory.toUpperCase()
-      : (policyTypeFilter && policyTypeFilter !== 'ALL' ? policyTypeFilter : 'GENERAL');
+  const catUpper = (category || "GENERAL").toUpperCase();
 
-    return {
-      intent: parsed.intent || 'GENERAL_INQUIRY',
-      isPersonalIntakeOrAction: Boolean(parsed.isPersonalIntakeOrAction),
-      isConversationalFollowUp: Boolean(parsed.isConversationalFollowUp),
-      detectedCategory,
-      selectedPlanName: parsed.selectedPlanName || null,
-      standaloneSearchQuery: parsed.standaloneSearchQuery?.trim() || trimmed
-    };
-  } catch (err) {
-    console.warn('⚠️ AI Intent Classification fallback:', err.message);
-    return {
-      intent: 'GENERAL_INQUIRY',
-      isPersonalIntakeOrAction: false,
-      isConversationalFollowUp: false,
-      detectedCategory: policyTypeFilter && policyTypeFilter !== 'ALL' ? policyTypeFilter : 'GENERAL',
-      selectedPlanName: null,
-      standaloneSearchQuery: trimmed
-    };
-  }
-};
-
-// Helper: converts wide Markdown tables into simple bullet points to make answers easier to read
-const formatConciseWidgetAnswer = (markdownText = '', askedForTable = false) => {
-  if (!markdownText || askedForTable) return markdownText;
-
-  const text = markdownText
-    .replace(/\n*_?All excerpts are taken verbatim[^\n]*_?\s*$/gi, '')
-    .trim();
-
-  const lines = text.split('\n');
-  const out = [];
-  let inTable = false;
-
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i].trim();
-    const isTableRow = line.startsWith('|') && line.endsWith('|') && line.split('|').length > 2;
-    const isSeparatorRow = isTableRow && /^[\s|:\-]+$/.test(line);
-
-    if (isTableRow) {
-      const cells = line
-        .slice(1, -1)
-        .split('|')
-        .map((c) => c.trim().replace(/<br\s*\/?>/gi, '; '));
-
-      if (!inTable) {
-        inTable = true;
-      } else if (!isSeparatorRow) {
-        const primary = cells[0] || '';
-        const details = cells
-          .slice(1)
-          .filter(Boolean)
-          .join(' — ');
-        if (primary || details) {
-          out.push(`- ${primary.startsWith('**') ? primary : `**${primary}**`}: ${details}`);
-        }
-      }
-    } else {
-      if (inTable) {
-        inTable = false;
-      }
-      out.push(lines[i]);
-    }
-  }
-
-  return out.join('\n').replace(/\n{3,}/g, '\n\n').trim();
-};
-
-export const getRequiredSlotsForCategory = (category = 'HEALTH') => {
-  const cat = (category || 'HEALTH').toUpperCase();
-  switch (cat) {
-    case 'COMMERCIAL':
-      return ['insuranceType', 'whoIsInsured', 'insuredName'];
-    case 'HOME':
-      return ['insuranceType', 'whoIsInsured', 'insuredName'];
-    case 'AUTO':
-      return ['insuranceType', 'whoIsInsured', 'insuredName', 'coveredAge'];
-    case 'TRAVEL':
-      return ['insuranceType', 'whoIsInsured', 'insuredName'];
-    case 'HEALTH':
-    case 'LIFE':
-    case 'ACCIDENT':
-    default:
-      return ['insuranceType', 'whoIsInsured', 'insuredName', 'coveredAge', 'healthOrRiskConditions'];
-  }
-};
-//checks which customer details are collected and which are still missing for the selected insurance category.
-const finalizeIntakeState = (rawProfile = {}, categoryOverride = null) => {
-  const detectedCategory = rawProfile.insuranceType || categoryOverride || 'HEALTH';
-  const requiredSlots = getRequiredSlotsForCategory(detectedCategory);
-
-  const state = {
-    insuranceType: rawProfile.insuranceType || categoryOverride || null,
-    whoIsInsured: rawProfile.whoIsInsured || null,
-    insuredName: rawProfile.insuredName || null,
-    coveredAge:
-      rawProfile.coveredAge !== null &&
-      rawProfile.coveredAge !== undefined &&
-      rawProfile.coveredAge !== '' &&
-      !Number.isNaN(Number(rawProfile.coveredAge))
-        ? Number(rawProfile.coveredAge)
-        : null,
-    healthOrRiskConditions: rawProfile.healthOrRiskConditions || null,
-    selectedPlanName: rawProfile.selectedPlanName || null
-  };
-
-  const missingFields = requiredSlots.filter(
-    (slot) => state[slot] === null || state[slot] === undefined || state[slot] === ''
+  // STRICT CATEGORY FILTER: Only policies matching this exact insurance category
+  const categoryOffers = allActiveOffers.filter(
+    (o) => o.policyCategory?.toUpperCase() === catUpper,
   );
 
-  return {
-    ...state,
-    missingFields,
-    nextSlot: missingFields[0] || null,
-    completedCount: requiredSlots.length - missingFields.length,
-    totalRequired: requiredSlots.length,
-    isComplete: missingFields.length === 0
-  };
-};
+  if (categoryOffers.length === 0) {
+    return [];
+  }
 
-const CATEGORY_TITLE_MAP = {
-  HEALTH: 'Health Insurance',
-  AUTO: 'Car & Motor Insurance',
-  HOME: 'Home & Property Insurance',
-  LIFE: 'Life Insurance',
-  ACCIDENT: 'Personal Accident Insurance',
-  AGRICULTURE: 'Agriculture Insurance',
-  COMMERCIAL: 'Commercial Insurance',
-  TRAVEL: 'Travel Insurance',
-  OTHER: 'General Insurance'
-};
-
-// saves the user's insurance details to MongoDB as the conversation continues, updating an existing policy record or creating a new one.
-export const saveProgressivePolicyToDb = async ({ user, intakeState, selectedOffer = null, question = '' }) => {
-  try {
-    if (!user?._id || mongoose.connection.readyState !== 1) {
-      return { savedPolicy: null, updatedUser: null, dbUpdated: false };
-    }
-
-    const hasExtractedData = PRIORITY_SLOTS.some(
-      (slot) => intakeState[slot] !== null && intakeState[slot] !== undefined
+  const userAge = intakeData.coveredAge ? Number(intakeData.coveredAge) : null;
+  const conditionText = (intakeData.healthOrRiskConditions || "").toLowerCase();
+  const tokens = conditionText
+    .split(/[\s,./-]+/)
+    .filter(
+      (w) =>
+        w.length > 2 &&
+        !["and", "for", "the", "with", "have", "has", "none", "plan", "need"].includes(w),
     );
-    if (!hasExtractedData && !selectedOffer) {
-      return { savedPolicy: null, updatedUser: null, dbUpdated: false };
+
+  const scoreOffer = (offer) => {
+    let score = 100;
+
+    // 1. Eligibility Check: Entry Age
+    if (userAge != null) {
+      const minAge =
+        offer.minimumEntryAge != null ? Number(offer.minimumEntryAge) : null;
+      const maxAge =
+        offer.maximumEntryAge != null ? Number(offer.maximumEntryAge) : null;
+
+      // Disqualify if outside entry age criteria
+      if (minAge != null && userAge < minAge) return -999;
+      if (maxAge != null && userAge > maxAge) return -999;
+
+      if (minAge != null && maxAge != null && userAge >= minAge && userAge <= maxAge) {
+        score += 25;
+      }
     }
 
+    // 2. LLM Explicit Selection Bonus
+    if (
+      recommendedPlanCodes.some(
+        (code) =>
+          String(code).trim().toLowerCase() ===
+          offer.policyReferenceCode?.toLowerCase(),
+      )
+    ) {
+      score += 50;
+    }
+
+    // 3. Search text & keyword relevance matching
+    const haystack = [
+      offer.planName,
+      offer.coverageSubtype,
+      offer.risksConsidered,
+      offer.benefitSublimits,
+      offer.preExistingConditionRules,
+      offer.exclusions,
+    ]
+      .filter(Boolean)
+      .join(" ")
+      .toLowerCase();
+
+    for (const token of tokens) {
+      if (haystack.includes(token)) {
+        score += 15;
+      }
+    }
+
+    // 4. Domain & User Profile Specific Relevance (Top Picks based on user details)
+    if (catUpper === "ACCIDENT") {
+      // High-risk occupation / driving / machinery / field work
+      const isWorkOrDriving = /truck|driver|driving|heavy|machinery|occupational|work|worker|hazard/i.test(conditionText);
+      if (isWorkOrDriving && /occupational|work|workplace|job/i.test(haystack)) {
+        score += 65; // Places WorkWell Occupational at the #1 Top Pick!
+      }
+      // Family protection
+      const isFamily = /family|child|children|wife|spouse|dependents/i.test(conditionText);
+      if (isFamily && /family|guardian/i.test(haystack)) {
+        score += 40;
+      }
+    } else if (catUpper === "AUTO") {
+      const isTwoWheeler = /\b(bike|motorbike|motorcycle|scooter|moped|two-wheeler|2-wheeler|bullet|royal enfield|classic 350|honda cb|ducati|harley|yamaha|kawasaki|vespa|tvs|bajaj)\b/i.test(conditionText);
+      const isBikePlan = /\b(bike|motorbike|motorcycle|scooter|two-wheeler|2-wheeler)\b/i.test(haystack);
+
+      // If user is asking for a motorcycle/bike, but policy is for passenger cars -> DISQUALIFY!
+      if (isTwoWheeler && !isBikePlan) {
+        return -999;
+      }
+
+      // Disqualify commercial fleet policies for personal vehicle commute inquiries
+      const isFleetOrCommercialOnly = /\b(fleet|commercial fleet|small business motor)\b/i.test(haystack);
+      const isPersonalCommute = !/commercial|fleet|business|courier|delivery|transit/i.test(conditionText) && intakeData.whoIsInsured !== 'BUSINESS';
+      if (isFleetOrCommercialOnly && isPersonalCommute) {
+        return -999;
+      }
+
+      // Disqualify specialized EV policies if user has a petrol/diesel vehicle
+      const isEVPlan = /\b(electric vehicle|ev protect|battery & charger)\b/i.test(haystack);
+      const isUserEV = /electric|ev\b|battery|hybrid|tesla/i.test(conditionText);
+      if (isEVPlan && !isUserEV) {
+        return -999;
+      }
+
+      // Budget sensitivity: disqualify policies that exceed 2.5x the user's explicit budget
+      const budgetMatch = conditionText.match(/(?:budget|paymnet|payment|around|approx|monthly|month)\D*(\d+)(?:\s*(?:to|-)\s*(\d+))?/i);
+      if (budgetMatch) {
+        const maxBudget = Number(budgetMatch[2] || budgetMatch[1]);
+        if (maxBudget > 0) {
+          const offerPremiumMatch = (offer.illustrativePremium || "").match(/£?(\d+)/);
+          if (offerPremiumMatch) {
+            const offerPremium = Number(offerPremiumMatch[1]);
+            if (offerPremium > maxBudget * 2.5) {
+              return -999;
+            }
+          }
+        }
+      }
+
+      if (isUserEV && /electric|ev\b|battery/i.test(haystack)) score += 60;
+      const isCommercialUsage = /commercial|business|transit|goods|taxi|delivery|van/i.test(conditionText);
+      if (isCommercialUsage && /commercial|transit|van|fleet/i.test(haystack)) score += 50;
+      const isComprehensive = /comprehensive|full/i.test(conditionText);
+      if (isComprehensive && /comprehensive/i.test(haystack)) score += 30;
+    } else if (catUpper === "HEALTH") {
+      const isSenior = userAge && userAge >= 60;
+      if (isSenior && /senior|elderly|plus/i.test(haystack)) score += 50;
+      const hasCondition =
+        conditionText.length > 3 && !/none|no\b|clean/i.test(conditionText);
+      if (hasCondition && /pre-existing/i.test(haystack)) score += 40;
+      const isFamily = /family|spouse|children/i.test(conditionText);
+      if (isFamily && /family|comprehensive/i.test(haystack)) score += 30;
+    } else if (catUpper === "COMMERCIAL") {
+      if (/fleet/i.test(conditionText) && /fleet/i.test(haystack)) score += 40;
+      if (/liability/i.test(conditionText) && /liability/i.test(haystack)) score += 30;
+    } else if (catUpper === "LIFE") {
+      const isTerm = /term|lump\s*sum|family/i.test(conditionText);
+      if (isTerm && /term|lane|family/i.test(haystack)) score += 40;
+    }
+
+    return score;
+  };
+
+  // Rank eligible offers in this category descending by relevance score (most related first)
+  const rankedOffers = categoryOffers
+    .map((offer) => ({ offer, score: scoreOffer(offer) }))
+    .filter((item) => item.score > 0)
+    .sort((a, b) => b.score - a.score)
+    .map((item) => item.offer);
+
+  // Return strictly the matching offers in this category up to limit (zero cross-category backfill)
+  return rankedOffers.slice(0, limit);
+};
+
+// Saves or updates policy details progressively using policyDetailService CRUD
+const savePolicyIntakeViaService = async ({
+  user,
+  category,
+  profile = {},
+  selectedOffer = null,
+  isEnrolled = false,
+}) => {
+  if (!user?._id || mongoose.connection.readyState !== 1) {
+    return { savedPolicy: null, updatedUser: null, dbUpdated: false };
+  }
+
+  const insuranceType = (
+    category ||
+    profile.insuranceType ||
+    selectedOffer?.policyCategory ||
+    "GENERAL"
+  ).toUpperCase();
+
+  const rawWho = (profile.whoIsInsured || "").trim().toUpperCase();
+  const whoIsInsured =
+    rawWho || (insuranceType === "COMMERCIAL" ? "BUSINESS" : "SELF");
+  const insuredName = (profile.insuredName || "").trim();
+
+  try {
     const userDoc = await User.findById(user._id);
-    if (!userDoc) return { savedPolicy: null, updatedUser: null, dbUpdated: false };
+    if (!userDoc)
+      return { savedPolicy: null, updatedUser: null, dbUpdated: false };
 
-    if (intakeState.whoIsInsured === 'SELF' && intakeState.coveredAge !== null) {
-      userDoc.age = Number(intakeState.coveredAge);
+    // Update user demographic age if self-insured
+    if (whoIsInsured === "SELF" && profile.coveredAge) {
+      userDoc.age = Number(profile.coveredAge);
+      await userDoc.save();
     }
 
-    const validTypes = ['HEALTH', 'AUTO', 'HOME', 'LIFE', 'COMMERCIAL', 'ACCIDENT', 'AGRICULTURE', 'TRAVEL', 'OTHER'];
-    const rawCat = (intakeState.insuranceType || selectedOffer?.policyCategory || 'HEALTH').toUpperCase();
-    const mappedType = validTypes.includes(rawCat) ? rawCat : 'OTHER';
+    // STRICT SAFETY BARRIER: Chat exploration must NEVER create a PolicyDetail record or mint a policy number!
+    // A policy is ONLY created or updated when the user has explicitly selected/enrolled in an offer.
+    if (!isEnrolled || !selectedOffer) {
+      return { savedPolicy: null, updatedUser: userDoc, dbUpdated: false };
+    }
 
-    const validWho = [
-      'SELF',
-      'SPOUSE',
-      'FATHER',
-      'MOTHER',
-      'PARENTS',
-      'CHILD',
-      'SON',
-      'DAUGHTER',
-      'BROTHER',
-      'SISTER',
-      'SIBLING',
-      'GRANDFATHER',
-      'GRANDMOTHER',
-      'GRANDPARENT',
-      'FAMILY',
-      'BUSINESS',
-      'ASSET',
-      'OTHER'
-    ];
-    const rawWho = (intakeState.whoIsInsured || '').trim().toUpperCase();
-    let mappedWho = WHO_SYNONYM_MAP[rawWho] || (validWho.includes(rawWho) ? rawWho : (rawWho ? 'OTHER' : ''));
+    const planName = selectedOffer.planName || `${insuranceType} Insurance Plan`;
+    const sumInsured = formatAmount(selectedOffer.annualCoverageAmount) || profile.sumInsured || "";
+    const premium = selectedOffer.illustrativePremium || "";
+    const status = "ACTIVE";
 
-    if (!mappedWho && mappedType === 'COMMERCIAL') mappedWho = 'BUSINESS';
+    // Retrieve user's existing policies via policyDetailService
+    const existingPolicies = await policyDetailService.getUserPolicies(user._id);
 
-    const twoHoursAgo = new Date(Date.now() - 2 * 60 * 60 * 1000);
-    const cleanTargetName = (intakeState.insuredName || '').trim();
-
-    // Check if user is asking for a new/separate policy
-    const isNewPolicyRequested = /\b(separate|another policy|new policy|second policy|2 insurances|two policies|one for.*one for)\b/i.test(question || '');
+    // Look for existing active policy for this insurance type or plan
+    let existingDoc = existingPolicies.find(
+      (p) =>
+        p.status === "ACTIVE" &&
+        ((p.policyNumber && p.policyNumber.includes(selectedOffer.policyReferenceCode)) ||
+          p.policyName?.toLowerCase() === planName.toLowerCase() ||
+          p.insuranceType === insuranceType),
+    );
 
     let policyDoc = null;
 
-    if (!isNewPolicyRequested) {
-      // 1. Try matching by insuredName if available
-      if (cleanTargetName) {
-        policyDoc = await PolicyDetail.findOne({
-          userId: userDoc._id,
-          insuranceType: mappedType,
-          insuredName: { $regex: `^${cleanTargetName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, $options: 'i' }
-        }).sort({ updatedAt: -1 });
-      }
+    if (existingDoc) {
+      // UPDATE via policyDetailService
+      const updateData = {
+        policyName: planName,
+        insuranceType,
+        whoIsInsured,
+        status,
+      };
+      if (insuredName) updateData.insuredName = insuredName;
+      if (profile.coveredAge) updateData.coveredAge = Number(profile.coveredAge);
+      if (profile.healthOrRiskConditions)
+        updateData.healthOrRiskConditions = profile.healthOrRiskConditions;
+      if (sumInsured) updateData.sumInsured = sumInsured;
+      if (premium) updateData.premium = premium;
 
-      // 2. Try matching by specific whoIsInsured role
-      if (!policyDoc && mappedWho && validWho.includes(mappedWho)) {
-        policyDoc = await PolicyDetail.findOne({
-          userId: userDoc._id,
-          insuranceType: mappedType,
-          whoIsInsured: mappedWho,
-          status: 'PENDING',
-          createdAt: { $gte: twoHoursAgo }
-        }).sort({ updatedAt: -1 });
-      }
-
-      // 3. Try matching an unassigned pending draft (where insuredName is empty)
-      if (!policyDoc) {
-        policyDoc = await PolicyDetail.findOne({
-          userId: userDoc._id,
-          insuranceType: mappedType,
-          status: 'PENDING',
-          $or: [{ insuredName: '' }, { insuredName: null }, { insuredName: { $exists: false } }],
-          createdAt: { $gte: twoHoursAgo }
-        }).sort({ updatedAt: -1 });
-      }
+      policyDoc = await policyDetailService.updatePolicy(
+        existingDoc._id,
+        user._id,
+        updateData,
+        user.role || "POLICYHOLDER",
+      );
+    } else {
+      // CREATE newly enrolled active policy via policyDetailService
+      policyDoc = await policyDetailService.createPolicy(user._id, {
+        policyName: planName,
+        insuranceType,
+        whoIsInsured,
+        insuredName: insuredName || userDoc.name,
+        coveredAge: profile.coveredAge ? Number(profile.coveredAge) : userDoc.age || null,
+        healthOrRiskConditions: profile.healthOrRiskConditions || "",
+        sumInsured,
+        premium,
+        status,
+      });
     }
-
-    // ONLY mark ACTIVE and lock in plan details if the user explicitly selected/enrolled in a plan
-    const isEnrolled = Boolean(selectedOffer);
-    const status = isEnrolled ? 'ACTIVE' : (policyDoc?.status || 'PENDING');
-    const categoryTitle = CATEGORY_TITLE_MAP[mappedType] || `${mappedType} Insurance`;
-    const planName = selectedOffer
-      ? selectedOffer.planName
-      : (policyDoc?.status === 'ACTIVE' && policyDoc?.policyName ? policyDoc.policyName : categoryTitle);
-    const sumInsured = selectedOffer
-      ? formatAmount(selectedOffer.annualCoverageAmount)
-      : (policyDoc?.status === 'ACTIVE' && policyDoc?.sumInsured ? policyDoc.sumInsured : '');
-    const premium = selectedOffer
-      ? selectedOffer.illustrativePremium
-      : (policyDoc?.status === 'ACTIVE' && policyDoc?.premium ? policyDoc.premium : '');
-
-    const effectiveWho = mappedWho || policyDoc?.whoIsInsured || '';
-    const finalInsuredName =
-      cleanTargetName ||
-      policyDoc?.insuredName ||
-      (effectiveWho === 'SELF' && intakeState.whoIsInsured === 'SELF' ? userDoc.name || '' : '');
-    const finalConditions = intakeState.healthOrRiskConditions || policyDoc?.healthOrRiskConditions || '';
-
-    const notes = [
-      finalInsuredName ? `Insured: ${finalInsuredName}` : null,
-      finalConditions ? `Conditions/Risks: ${finalConditions}` : null,
-      selectedOffer ? `Plan: ${selectedOffer.planName} (${selectedOffer.policyReferenceCode})` : null
-    ]
-      .filter(Boolean)
-      .join(' | ');
 
     if (policyDoc) {
-      policyDoc.policyName = planName;
-      if (intakeState.insuranceType || selectedOffer?.policyCategory) {
-        policyDoc.insuranceType = mappedType;
-      }
-      if (effectiveWho) {
-        policyDoc.whoIsInsured = effectiveWho;
-      }
-      if (finalInsuredName) {
-        policyDoc.insuredName = finalInsuredName;
-      }
-      if (intakeState.coveredAge !== null) {
-        policyDoc.coveredAge = Number(intakeState.coveredAge);
-      }
-      if (finalConditions) {
-        policyDoc.healthOrRiskConditions = finalConditions;
-      }
-      if (selectedOffer) {
-        policyDoc.sumInsured = sumInsured;
-        policyDoc.premium = premium;
-      } else if (!isEnrolled && policyDoc.status === 'PENDING') {
-        policyDoc.sumInsured = '';
-        policyDoc.premium = '';
-      }
-      policyDoc.status = status;
-      policyDoc.notes = notes;
-      await policyDoc.save();
-
-      const idx = userDoc.policies.findIndex((p) => p.policyId?.toString() === policyDoc._id.toString());
-      if (idx !== -1) userDoc.policies[idx].policyName = planName;
-      else userDoc.policies.push({ policyId: policyDoc._id, policyName: planName });
-    } else {
-      const refPrefix = selectedOffer?.policyReferenceCode || mappedType.slice(0, 4);
-      const policyNumber = `POL-${refPrefix}-${Math.floor(1000 + Math.random() * 9000)}`.toUpperCase();
-
-      policyDoc = await PolicyDetail.create({
-        userId: userDoc._id,
-        policyNumber,
-        policyName: planName,
-        insuranceType: mappedType,
-        whoIsInsured: effectiveWho,
-        insuredName: finalInsuredName,
-        coveredAge: intakeState.coveredAge !== null ? Number(intakeState.coveredAge) : null,
-        healthOrRiskConditions: finalConditions,
-        sumInsured,
-        policyTerm: '1 Year',
-        premium,
-        nomineeName: '',
-        nomineeRelationship: '',
-        status,
-        notes
-      });
-
-      userDoc.policies.push({ policyId: policyDoc._id, policyName: policyDoc.policyName });
+      const updatedUser = await authService.getUserById(user._id);
+      return { savedPolicy: policyDoc, updatedUser, dbUpdated: true };
     }
 
-    await userDoc.save();
-    const updatedUser = await authService.getUserById(userDoc._id);
-
-    return { savedPolicy: policyDoc, updatedUser, dbUpdated: true };
+    return { savedPolicy: null, updatedUser: userDoc, dbUpdated: false };
   } catch (err) {
-    console.warn('⚠️ Could not save progressive policy intake to MongoDB:', err.message);
+    console.warn("⚠️ Progressive policy save notice:", err.message);
     return { savedPolicy: null, updatedUser: null, dbUpdated: false };
   }
 };
 
-
-export const GENERAL_INSURANCE_INSTRUCTIONS = `You are a warm, knowledgeable, human-like AI Insurance Advisor.
-
-CORE PRINCIPLES & CONVERSATIONAL BEHAVIOR:
-1. CONVERSATIONAL NEEDS DISCOVERY FIRST (CHAT & ASSESS BEFORE RECOMMENDING):
-   - When a user first comes in with an open-ended question or exploratory inquiry (e.g. "I started a new business with my friend so is there any insurance for me", "I need health insurance for my parents", "How does insurance work?"):
-     * CHAT FIRST! Do NOT dump plan cards on the initial inquiry!
-     * Warmly and clearly explain how insurance works for their situation, introducing the general types of cover (e.g. for a commercial business: Public Liability, Professional Indemnity, Property/Equipment, Cyber; for health: inpatient/outpatient, pre-existing conditions).
-     * Ask natural clarifying questions to discover their needs (e.g. What type of business or industry are you in? What coverage amount or budget do you have in mind? What specific activities or assets are you looking to protect?).
-     * CRITICAL: Keep "recommendedPlanCodes" as EMPTY [] during this initial discussion! Do not recommend specific plan cards until the user shares their specific details and preferences.
-
-2. WHEN TO RECOMMEND PLANS (EVIDENCE & REQUIREMENT BASED):
-   - Only populate "recommendedPlanCodes" (with 2 to 3 matching policy codes from RELEVANT OFFERS below) when:
-     a) The user has provided their details (such as business type/industry, required coverage amount, or for health: family members, ages, health conditions).
-     b) OR the user explicitly requests recommendations or quotes (e.g. "Show me the plans", "Recommend plans for me", "Give me quotes", "What plans do you recommend?").
-   - Base your recommendations on their stated coverage amount, budget, eligible age, and risk profile.
-   - If details are not yet known or the user is just starting the chat, keep "recommendedPlanCodes" as EMPTY [].
-
-3. AI SEMANTIC EXTRACTION & INTAKE (NO HARDCODED ASSUMPTIONS):
-   - You must semantically extract intake details directly from what the user expresses:
-     * "whoIsInsured": Identify the beneficiary/entity from conversational context ("BUSINESS", "SELF", "FATHER", "MOTHER", "PARENTS", "SPOUSE", "CHILD", "SON", "DAUGHTER", "BROTHER", "SISTER", "GRANDPARENT", etc.).
-     * "insuredName": Extract the actual full name of the person or entity mentioned.
-     * "coveredAge": Extract their age as an integer whenever mentioned.
-     * "healthOrRiskConditions": Semantically extract any health condition, medical history, surgery, chronic illness, medication, or wellness state declared (e.g., "stroke 7 years ago, ongoing medication", "type 2 diabetes", "hypertension", "clean bill of health / no issues"). Do not rely on specific keywords; understand medical context generally.
-     * "insuranceType": Accurately classify category ("COMMERCIAL", "HEALTH", "AUTO", "HOME", "LIFE", "ACCIDENT", "AGRICULTURE", "TRAVEL").
-   - Adapt what information you collect based on category:
-     * **COMMERCIAL**: Focus on Business Name/Entity, Nature of Business / Industry / Activity, and primary risks (Liability, Property, Cyber, Partner protection). DO NOT ask for personal ages or medical history for a commercial property/liability policy!
-     * **AUTO**: Focus on Vehicle make/model/year, Driver age/license, and coverage type (Comprehensive vs Third Party).
-     * **HOME**: Focus on Property type (house, flat, rented), Buildings vs Contents, and special risks.
-     * **HEALTH / LIFE / ACCIDENT**: Focus on Who is covered (self, parents, children, spouse), Names, Ages, and any Pre-existing Health Conditions or medical history.
-   - Collect details naturally through ongoing dialogue rather than rigid checklist interrogation. NEVER output numbered checklists (1, 2, 3...) or label steps like "Step 1" or "Priority 1".
-
-4. GROUND TRUTH (DATABASE INTEGRITY & OLD POLICIES CATCH-UP):
-   - Check the Existing Customer Information (Ground Truth) provided below! NEVER re-ask for details already saved in Ground Truth or stated earlier in the conversation.
-   - If a field is already known, acknowledge it and do not ask again.
-   - CATCH UP ON PREVIOUS POLICIES: If the user asks about their old, existing, or enrolled policies (e.g. "tell me about my policy", "what is my policy number?", "what does my enrolled plan cover?", "tell me about dad's policy", "can you explain my old insurance details?"):
-     * Review the Ground Truth records provided below.
-     * Identify their policy clearly by its Policy Number (e.g. #POL-...), Plan Name, covered person/business, and enrollment status.
-     * Thoroughly explain their benefits, coverage limit, premium, pre-existing condition rules, and terms based on Ground Truth and retrieved policy clauses.
-     * Do NOT re-enroll them or ask them to re-enter details already recorded.
-
-5. SEPARATE POLICIES FOR MULTIPLE PEOPLE (Health/Personal):
-   - If the user wants separate policies for multiple individuals (e.g. mom and dad separately), maintain separate distinct records in "extractedProfiles" (each with their own whoIsInsured, insuredName, coveredAge, and conditions).
-   - NEVER mix details between them.
-
-6. PLAN SELECTION & ENROLLMENT (EXCLUSIVE ENROLLMENT):
-   - If the user explicitly selects or enrolls in a specific plan (e.g. "Select LiabilityLine", "I choose Meadow Senior Care", "Option 1", "Go with ProSkill", "Select Summit Comprehensive Health"):
-     * Set "selectedPlanName" to the exact chosen plan name.
-     * If multiple profiles exist in "extractedProfiles", assign "selectedPlanName" specifically to the individual being enrolled (e.g. set Meadow Senior Care on Dad's profile).
-     * Congratulate them on selecting that plan, confirm that it is now enrolled for them, and summarize their key coverage benefits (limit, deductible, monthly premium).
-     * CRITICAL: Set "recommendedPlanCodes" as EMPTY []! Once a plan is chosen/enrolled, do NOT show other unselected recommendations.
-   - If the user has NOT explicitly chosen a plan yet, keep "selectedPlanName" as null.
-
-7. STRICTLY NO TECHNICAL JARGON:
-   - Never mention internal technical terms like database, Qdrant, chunks, vectors, embeddings, or JSON.
-
-Respond strictly in JSON:
-{
-  "answer": "<Warm, human-like, informative reply answering user's question, introducing relevant coverage types, and gently guiding next steps>",
-  "confidence": "HIGH" | "MEDIUM" | "LOW" | "NOT_FOUND",
-  "suggestedFollowUps": ["<Relevant follow-up question 1>", "<Relevant follow-up question 2>"],
-  "extractedProfile": {
-    "insuranceType": "COMMERCIAL" | "HEALTH" | "AUTO" | "HOME" | "LIFE" | "ACCIDENT" | "AGRICULTURE" | "TRAVEL" | null,
-    "whoIsInsured": "BUSINESS" | "SELF" | "SPOUSE" | "FATHER" | "MOTHER" | "PARENTS" | "CHILD" | "OTHER" | null,
-    "insuredName": "string or null",
-    "coveredAge": null,
-    "healthOrRiskConditions": "string or null",
-    "selectedPlanName": "string or null"
-  },
-  "extractedProfiles": [],
-  "recommendedPlanCodes": []
-}`;
-
-// Unified Insurance AI RAG Agent powered by Qdrant/MongoDB semantic search & Groq LLM with multi-turn memory
+// Main Unified Insurance RAG Advisor Orchestrator
 export const answerInsuranceQuery = async ({
   question,
   conversationHistory = [],
   policyTypeFilter = null,
   policyCodeFilter = null,
   planNameFilter = null,
-  user = null
+  user = null,
 }) => {
-  const askedForTable = /\b(table|tabular|columns|grid|matrix)\b/i.test(question || '');
-  const trimmed = (question || '').trim().toLowerCase();
-  const isSinglePlanMode = Boolean(policyCodeFilter || planNameFilter);
+  const trimmed = (question || "").trim().toLowerCase();
 
-  // Fetch user policies ONCE upfront to eliminate redundant database calls across the function
+  // 1. Fetch user's recorded policies using policyDetailService CRUD
   const allUserPolicies =
     user?._id && mongoose.connection.readyState === 1
-      ? await PolicyDetail.find({ userId: user._id }).sort({ createdAt: -1 })
+      ? await policyDetailService.getUserPolicies(user._id)
       : [];
 
-  // Resolve target single offer if policyCodeFilter or planNameFilter was passed
+  // 2. Resolve single target offer if scoped
   let targetOffer = null;
   if (policyCodeFilter) {
     targetOffer = await PolicyOffer.findOne({
-      policyReferenceCode: { $regex: `^${policyCodeFilter.trim()}$`, $options: 'i' }
+      policyReferenceCode: {
+        $regex: `^${policyCodeFilter.trim()}$`,
+        $options: "i",
+      },
     });
   } else if (planNameFilter) {
-    const cleanName = planNameFilter.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').trim();
     targetOffer = await PolicyOffer.findOne({
-      planName: { $regex: cleanName, $options: 'i' }
+      planName: { $regex: planNameFilter.trim(), $options: "i" },
     });
   }
 
-  // Gracefully handle common greetings and orientation questions with clean, concise payload
-  const isGreeting = /^(hi+|hello+|hey+|good\s+(morning|afternoon|evening)|help|greetings|who\s+are\s+you|what\s+can\s+you\s+do)[\s!.,?]*$/i.test(trimmed);
-  if (isGreeting) {
-    const firstName = user?.name ? user.name.split(' ')[0] : '';
+  // 3. Fast-path for common greetings
+  if (
+    /^(hi+|hello+|hey+|good\s+(morning|afternoon|evening)|help)[\s!.,?]*$/i.test(
+      trimmed,
+    )
+  ) {
+    const firstName = user?.name ? user.name.split(" ")[0] : "";
     return {
       queryId: `greeting_${Date.now()}`,
       question,
       answer: targetOffer
-        ? `👋 **Hello${firstName ? ` ${firstName}` : ''}!** I am your dedicated advisor for **${targetOffer.planName}** (by ${targetOffer.insurer}).\n\nAsk me anything about this plan's coverage limit, eligible age range, monthly premium, deductible, waiting periods, or exclusions.`
-        : `Hello${firstName ? ` ${firstName}` : ''}! 👋 I'm your AI Insurance Advisor. How can I help you today? Tell me what type of insurance you are looking for (such as Health, Car/Motor, Home, Life, Personal Accident, Agriculture, or Commercial).`,
-      confidence: 'HIGH',
+        ? `👋 Hello${firstName ? ` ${firstName}` : ""}! I am your dedicated advisor for **${targetOffer.planName}** (${targetOffer.insurer}). Ask me anything about its coverage limits, monthly premiums, excess deductibles, or how to get covered!`
+        : `Hello${firstName ? ` ${firstName}` : ""}! 👋 I'm your AI Insurance Advisor. What type of insurance can I help you explore today (Auto, Health, Home, Life, Commercial, Travel, etc.)?`,
+      confidence: "HIGH",
       userPolicies: allUserPolicies,
       recommendedOffers: [],
-      suggestedFollowUps: [],
-      createdAt: new Date().toISOString()
+      createdAt: new Date().toISOString(),
     };
   }
 
-  // 1. AI Intent Classification, Contextual Query Rewriting, and Category Classification
-  const aiContext = await classifyAndContextualizeWithAI({
-    question,
-    conversationHistory,
-    policyTypeFilter
-  });
+  // 4. Semantic Search across Qdrant & MongoDB knowledge base
+  let retrievedClauses = [];
+  try {
+    const filter = policyTypeFilter ? { policyType: policyTypeFilter } : null;
+    retrievedClauses = await searchSimilarPolicyClauses(question, 4, filter);
+  } catch (err) {
+    console.warn("⚠️ Semantic search notice:", err.message);
+  }
 
-  const contextualSearchQuery = aiContext.standaloneSearchQuery || question;
-  const isPersonalIntake = aiContext.isPersonalIntakeOrAction;
-  const detectedCategory = aiContext.detectedCategory;
+  let contextText =
+    retrievedClauses.length > 0
+      ? retrievedClauses
+          .map(
+            (c, i) =>
+              `[SOURCE ${i + 1}] (${c.payload?.policyCode || "POLICY"}) ${c.payload?.title || c.payload?.planName || ""}\n${(c.payload?.content || "").slice(0, 450)}`,
+          )
+          .join("\n---\n")
+      : "Rely on general insurance domain expertise.";
 
-  // 2. Retrieve top matching official insurance policy clauses & offers from Qdrant / MongoDB Vector Store
-  let retrievedPoints = [];
   if (targetOffer) {
-    retrievedPoints = [
-      {
-        id: targetOffer.qdrantPointId || `offer_${targetOffer._id}`,
-        score: 1.0,
-        payload: {
-          policyOfferId: targetOffer._id.toString(),
-          title: `${targetOffer.planName} (${targetOffer.insurer})`,
-          planName: targetOffer.planName,
-          insurer: targetOffer.insurer,
-          policyType: targetOffer.policyCategory,
-          policyCode: targetOffer.policyReferenceCode,
-          sectionTitle: `${targetOffer.policyCategory} Plan • ${targetOffer.coverageSubtype || 'Standard'}`,
-          content: targetOffer.chunkText || formatPolicyOfferText(targetOffer)
-        }
-      }
-    ];
-  } else {
-    try {
-      const filter = policyTypeFilter && policyTypeFilter !== 'ALL'
-        ? { policyType: policyTypeFilter }
-        : (detectedCategory && detectedCategory !== 'GENERAL' ? { policyType: detectedCategory } : null);
-
-      retrievedPoints = await searchSimilarPolicyClauses(contextualSearchQuery, 6, filter);
-      if ((!retrievedPoints || retrievedPoints.length === 0) && filter) {
-        retrievedPoints = await searchSimilarPolicyClauses(contextualSearchQuery, 6, null);
-      }
-    } catch (searchErr) {
-      console.warn('⚠️ Vector search notice:', searchErr.message);
-    }
+    const targetBrief = `[PRIMARY TARGET PLAN] ${targetOffer.planName} (#${targetOffer.policyReferenceCode}) by ${targetOffer.insurer}
+Category: ${targetOffer.policyCategory} | Type: ${targetOffer.coverageSubtype || "Standard"}
+Coverage Limit: ${formatAmount(targetOffer.annualCoverageAmount)} | Monthly Premium: ${targetOffer.illustrativePremium || "N/A"}
+Deductible / Excess: ${targetOffer.excessDeductible || "Standard"} | Benefits: ${targetOffer.benefitSublimits || "Comprehensive"}
+Waiting Periods: ${targetOffer.waitingPeriods || "None"} | Exclusions: ${targetOffer.exclusions || "Standard policy exclusions"}`;
+    contextText = `${targetBrief}\n---\n${contextText}`;
   }
 
-  const citedClauses = [];
-  let contextText = '';
+  // 5. Build Ground Truth from Database Policies (Strictly Active Enrolled Policies Only)
+  const activeUserPolicies = allUserPolicies.filter((p) => p.status === "ACTIVE");
+  const groundTruthText =
+    activeUserPolicies.length > 0
+      ? `RECORDED ENROLLED POLICIES GROUND TRUTH (FROM DATABASE - DO NOT RE-ASK):\n` +
+        activeUserPolicies
+          .map(
+            (p, i) =>
+              `#${i + 1}: Policy Number ${p.policyNumber || "N/A"}, Plan: "${p.policyName}", Category: ${p.insuranceType}, Insured: "${p.insuredName || p.whoIsInsured}", Age: ${p.coveredAge || "N/A"}, Conditions: "${p.healthOrRiskConditions || "None"}", Limit: ${p.sumInsured || "N/A"}, Status: ${p.status}`,
+          )
+          .join("\n")
+      : "RECORDED ENROLLED POLICIES GROUND TRUTH: The customer currently has NO active enrolled policies. You MUST NOT invent, assume, cite, or hallucinate any policy numbers (#POL-...)! NEVER mention fast-tracking non-existent policies.";
 
-  if (retrievedPoints && retrievedPoints.length > 0) {
-    const topPoints = retrievedPoints.slice(0, 4);
-    contextText = topPoints
-      .map((p, idx) => {
-        const payload = p.payload || {};
-        citedClauses.push({
-          policyTitle: payload.title || payload.planName || 'Insurance Policy',
-          insurer: payload.insurer || 'General Insurer',
-          policyCode: payload.policyCode || payload.policyReferenceCode || '',
-          policyType: payload.policyType || payload.policyCategory || 'GENERAL',
-          version: payload.version || '1.0',
-          contentSnippet: (payload.content || '').slice(0, 250),
-          relevanceScore: Math.round((p.score || p.hybridScore || 0) * 100) / 100
-        });
+  const targetOfferPrompt = targetOffer
+    ? `\n🎯 TARGET POLICY FOCUS (MANDATORY):
+The user is having a dedicated discussion specifically about "${targetOffer.planName}" (#${targetOffer.policyReferenceCode}) offered by ${targetOffer.insurer}.
+Coverage Limit: ${formatAmount(targetOffer.annualCoverageAmount)} | Premium: ${targetOffer.illustrativePremium} | Deductible: ${targetOffer.excessDeductible} | Benefits: ${targetOffer.benefitSublimits} | Waiting Periods: ${targetOffer.waitingPeriods}.
+CRITICAL RULE: Answer the user's questions specifically regarding THIS policy. Do NOT confuse or switch to other policies from RECORDED ENROLLED POLICIES GROUND TRUTH unless the user explicitly asks to compare them.\n`
+    : "";
 
-        const snippet = (payload.content || '').trim().slice(0, 500);
-        return `[SOURCE ${idx + 1}] (${payload.policyCode || payload.policyReferenceCode || 'N/A'} - ${payload.title || payload.planName || 'Insurance Plan'})
-Category: ${payload.policyType || payload.policyCategory || 'GENERAL'}
-Section: ${payload.sectionTitle || 'Policy Schedule'}
-Text:
-${snippet}
-`;
-      })
-      .join('\n---\n\n');
-  } else {
-    // If not found in vector search, LLM handles answering directly using general insurance domain knowledge
-    contextText = 'No specific matching policy clauses were found in the knowledge base for this query. As an expert Insurance AI Advisor, answer the user accurately using general insurance domain knowledge and provide clear guidance.';
-  }
-
-  // Build Persistent Ground Truth using the already-fetched allUserPolicies from MongoDB
-  let userPoliciesGroundTruth = '';
-  if (allUserPolicies.length > 0) {
-    const policyLines = allUserPolicies
-      .map((p, i) => {
-        return `- Policy #${i + 1}:
-  * Policy Number: ${p.policyNumber || 'N/A'}
-  * Plan Name: "${p.policyName || 'Standard Insurance Plan'}"
-  * Insurance Category: ${p.insuranceType || 'HEALTH'}
-  * Covered Person/Role: ${p.whoIsInsured || 'SELF'} (Full Name: "${p.insuredName || 'N/A'}")
-  * Covered Age: ${p.coveredAge ?? 'N/A'}
-  * Health / Risk Factors: "${p.healthOrRiskConditions || 'None reported'}"
-  * Sum Insured / Limit: ${p.sumInsured || 'Standard plan limit'}
-  * Monthly/Annual Premium: ${p.premium || 'Standard rate'}
-  * Policy Term: ${p.policyTerm || '1 Year'}
-  * Enrollment Status: ${p.status}`;
-      })
-      .join('\n\n');
-
-    userPoliciesGroundTruth = `CURRENT RECORDED POLICIES ALREADY SAVED IN DATABASE (GROUND TRUTH - NEVER FORGET OR RE-ASK FOR THESE):
-${policyLines}
-
-CRITICAL CONVERSATIONAL RULES REGARDING GROUND TRUTH & EXISTING POLICIES:
-1. NEVER re-ask for details already captured in the Ground Truth above!
-- If Category is recorded (e.g. COMMERCIAL or HEALTH), you ALREADY know what insurance they have. NEVER ask what type of insurance they want!
-- If Insured Names are recorded (e.g. Maria David Joseph, David Joseph, or a Business Name), you ALREADY know their names. NEVER ask for their names again!
-- If their ages or health conditions are recorded, do NOT ask for them again.
-2. CATCH UP ON PREVIOUS POLICIES: If the user asks to catch up, review, or know more about their existing/old policy (e.g. "tell me about my policy", "what is my policy number?", "what does my enrolled plan cover?", "tell me about dad's policy", "explain my old policy details"):
-- Review the Ground Truth records above.
-- Identify the policy clearly by its Policy Number (e.g. #POL-...), Plan Name, covered person/business, and enrollment status.
-- Thoroughly and helpfully explain their benefits, limits, premiums, and coverage features using the Ground Truth and retrieved document clauses.
-3. If all fields for a person are recorded in the Ground Truth, DO NOT interrogate them. Answer their questions directly or guide their next inquiry naturally.`;
-  }
-
-  const model = env.GROQ_MODEL;
-
-  // Message Assembly
-  let existingCustomerInfo = `Customer Name: ${user?.name || 'Customer'}`;
-  if (targetOffer) {
-    existingCustomerInfo += `\nSelected Target Plan: "${targetOffer.planName}" (${targetOffer.policyReferenceCode || 'N/A'}) by ${targetOffer.insurer || 'Carrier'}`;
-  }
-  if (userPoliciesGroundTruth) {
-    existingCustomerInfo += `\n\n${userPoliciesGroundTruth}`;
-  }
-
-  const retrievedContext = contextText && contextText.trim().length > 0
-    ? contextText
-    : 'No specific policy clauses retrieved for this query. Rely on general insurance domain knowledge and clarify with the user.';
-
-  const recentHistory = conversationHistory.slice(-30);
-  const historyMessages = [];
-  for (const m of recentHistory) {
-    if (m.role === 'user' && m.content) {
-      historyMessages.push({ role: 'user', content: m.content });
-    } else if (m.role === 'assistant' && m.content) {
-      historyMessages.push({
-        role: 'assistant',
-        content: JSON.stringify({ answer: (m.content || '').slice(0, 650) })
-      });
-    }
-  }
-
-  const groqMessages = [
-    { role: 'system', content: GENERAL_INSURANCE_INSTRUCTIONS },
-    ...historyMessages,
-    {
-      role: 'user',
-      content: `User question: ${question}\n\nExisting customer information:\n${existingCustomerInfo}\n\nRelevant retrieved policy information:\n${retrievedContext}`
-    }
-  ];
-
-  let answer = '';
-  let confidence = 'HIGH';
-  let suggestedFollowUps = [];
-  let extractedProfile = {};
-  let extractedProfiles = [];
-  let recommendedPlanCodes = [];
-  let durationMs = 0;
-
-  // 4. Single Unified Groq LLM Call (with automatic retry if Groq TPM rate limit window is briefly hit)
+  // 6. Single Unified Groq LLM Inference with Natural Language Processing
   const groq = getGroqClient();
   const startTime = Date.now();
+  let answer = "";
+  let confidence = "HIGH";
+  let detectedInsuranceType = "GENERAL";
+  let extractedProfile = {};
+  let isReadyForRecommendations = false;
+  let sensitiveDocsNoticeNeeded = false;
+  let recommendedPlanCodes = [];
+
   try {
-    const completion = await createGroqCompletionWithRetry(groq, {
-      model,
-      messages: groqMessages,
+    const recentHistory = (conversationHistory || []).slice(-16);
+    const messages = [
+      { role: "system", content: SYSTEM_PROMPT },
+      ...recentHistory.map((h) => ({
+        role: h.role === "user" ? "user" : "assistant",
+        content: String(h.content || "").slice(0, 400),
+      })),
+      {
+        role: "user",
+        content: `Question: ${question}\n\nCustomer Name: "${user?.name || "Customer"}" (Registered user account name - you MUST address them ONLY by this exact name if using a name; do NOT substitute with "Alex" or any other name!)\n\n${targetOfferPrompt}\n\n${groundTruthText}\n\nRELEVANT POLICIES IN KNOWLEDGE BASE:\n${contextText}`,
+      },
+    ];
+
+    const completion = await callGroqWithRetry(groq, {
+      model: env.GROQ_MODEL,
+      messages,
       temperature: 0.1,
-      response_format: { type: 'json_object' }
+      response_format: { type: "json_object" },
     });
-    durationMs = Date.now() - startTime;
 
-    let raw = completion?.choices?.[0]?.message?.content || '{}';
-    raw = raw.replace(/```json\s*|```\s*$/g, '').trim();
-    const parsed = JSON.parse(raw);
-
-    const rawAnswer = parsed.answer || 'How can I help you with your insurance coverage today?';
-    answer = formatConciseWidgetAnswer(rawAnswer, askedForTable);
-    confidence = parsed.confidence || 'HIGH';
+    const parsed = JSON.parse(completion.choices[0]?.message?.content || "{}");
+    answer = parsed.answer || "How can I assist with your insurance needs?";
+    confidence = parsed.confidence || "HIGH";
+    detectedInsuranceType = (parsed.detectedInsuranceType || "GENERAL").toUpperCase();
     extractedProfile = parsed.extractedProfile || {};
-    extractedProfiles = Array.isArray(parsed.extractedProfiles) ? parsed.extractedProfiles : [];
-    recommendedPlanCodes = Array.isArray(parsed.recommendedPlanCodes) ? parsed.recommendedPlanCodes : [];
-
-    if (Array.isArray(parsed.suggestedFollowUps)) {
-      suggestedFollowUps = parsed.suggestedFollowUps
-        .filter((q) => typeof q === 'string' && q.trim().length > 8)
-        .map((q) => q.replace(/^\d+[\.\)]\s*|^[-*•]\s*/, '').trim());
-    }
-  } catch (error) {
-    durationMs = Date.now() - startTime;
-    console.warn('Groq LLM call failed or returned non-JSON:', error.message);
-    answer = targetOffer
-      ? `${targetOffer.planName} (${targetOffer.insurer}) provides up to ${formatAmount(targetOffer.annualCoverageAmount)} coverage at ${targetOffer.illustrativePremium}.`
-      : 'Could you please tell me what type of insurance you are looking for today?';
-    confidence = 'MEDIUM';
+    isReadyForRecommendations = Boolean(parsed.isReadyForRecommendations);
+    sensitiveDocsNoticeNeeded = Boolean(parsed.sensitiveDocsNoticeNeeded);
+    recommendedPlanCodes = Array.isArray(parsed.recommendedPlanCodes)
+      ? parsed.recommendedPlanCodes
+      : [];
+  } catch (err) {
+    console.warn("⚠️ Groq call notice:", err.message);
+    answer =
+      "I am your Insurance Advisor. Could you please specify which insurance category you are interested in?";
+    confidence = "MEDIUM";
   }
+  const durationMs = Date.now() - startTime;
 
-  // 5. Finalize intake state, resolve recommended offers from DB, and progressively update MongoDB
-  const intakeState = finalizeIntakeState(extractedProfile);
+  // 7. Resolve Recommended Plan Cards & Plan Selection from DB
   let recommendedOffers = [];
-  let savedPolicy = null;
-  let updatedUser = null;
-  let dbUpdated = false;
+  let selectedOffer = null;
+  let isEnrolled = false;
 
-  if (!isSinglePlanMode) {
-    const allActiveOffers = await PolicyOffer.find({ status: 'ACTIVE' }).select('-vector');
+  const allActiveOffers = await PolicyOffer.find({ status: "ACTIVE" }).select(
+    "-vector",
+  );
 
-    // Resolve explicit user plan selection
-    let selectedPlanOffer = null;
-    const planCandidate = aiContext.selectedPlanName || intakeState.selectedPlanName;
+  // Strict enrollment intent detection: only triggers when user explicitly commands to buy/enroll/select
+  const enrollRegex = /\b(enroll|enrolling|select this|choose this|buy this|purchase this|opt in|sign up for)\b/i;
+  const isEnrollIntent = enrollRegex.test(trimmed);
 
-    if (planCandidate) {
-      const cleanCandidate = String(planCandidate).toLowerCase().trim();
-      selectedPlanOffer =
-        allActiveOffers.find((o) =>
-          o.planName.toLowerCase().includes(cleanCandidate) ||
-          cleanCandidate.includes(o.planName.toLowerCase()) ||
-          o.policyReferenceCode.toLowerCase() === cleanCandidate
-        ) || null;
-
-      if (!selectedPlanOffer) {
-        const optMatch = cleanCandidate.match(/\b(?:option|plan|choice)\s*([1-5])\b/i);
-        if (optMatch && recommendedPlanCodes.length > 0) {
-          const idx = parseInt(optMatch[1], 10) - 1;
-          const targetCode = recommendedPlanCodes[idx];
-          if (targetCode) {
-            selectedPlanOffer = allActiveOffers.find((o) => o.policyReferenceCode.toLowerCase() === targetCode.toLowerCase()) || null;
-          }
-        }
-      }
-    }
-
-    if (!selectedPlanOffer && (aiContext.intent === 'PLAN_SELECTION' || intakeState.selectedPlanName)) {
-      for (const offer of allActiveOffers) {
-        if (question.toLowerCase().includes(offer.planName.toLowerCase()) ||
-            question.toLowerCase().includes(offer.policyReferenceCode.toLowerCase())) {
-          selectedPlanOffer = offer;
-          break;
-        }
-      }
-    }
-
-    if (selectedPlanOffer) {
-      // User enrolled! Only return the chosen plan
-      recommendedOffers = [selectedPlanOffer];
-    } else {
-      // Evidence-based plan recommendations
-      const activeCategory =
-        intakeState.insuranceType ||
-        extractedProfile.insuranceType ||
-        (detectedCategory && detectedCategory !== 'GENERAL' ? detectedCategory : null);
-
-      if (activeCategory && !intakeState.insuranceType) {
-        intakeState.insuranceType = activeCategory;
-      }
-
-      const isExplicitPlanRequest = /\b(show\s+(?:me\s+)?(?:the\s+)?(?:plans|quotes|options)|recommend\s+(?:me\s+)?(?:a\s+)?plan|give\s+(?:me\s+)?(?:some\s+)?quotes|which\s+plan\s+should|what\s+plans\s+can\s+i\s+choose|available\s+plans\s+to\s+select|what\s+are\s+the\s+plans|options\s+to\s+choose)\b/i.test(question || '');
-
-      const hasSubstantiveDetails =
-        intakeState.isComplete ||
-        (intakeState.insuranceType === 'COMMERCIAL' && (intakeState.insuredName || intakeState.whoIsInsured)) ||
-        (['HEALTH', 'LIFE', 'ACCIDENT'].includes((activeCategory || '').toUpperCase()) && (intakeState.coveredAge || intakeState.healthOrRiskConditions));
-
-      const isEarlyTurn = (!conversationHistory || conversationHistory.length <= 1) && !isExplicitPlanRequest && !hasSubstantiveDetails;
-
-      const shouldRecommend = !isEarlyTurn && (
-        isExplicitPlanRequest ||
-        (recommendedPlanCodes.length > 0 && hasSubstantiveDetails) ||
-        intakeState.isComplete
-      );
-
-      if (shouldRecommend) {
-        const catUpper = activeCategory && activeCategory !== 'ALL' ? activeCategory.toUpperCase() : null;
-        const matchingCategoryOffers = catUpper
-          ? allActiveOffers.filter((o) => o.policyCategory?.toUpperCase() === catUpper)
-          : allActiveOffers;
-        const categoryOffers = matchingCategoryOffers.length > 0 ? matchingCategoryOffers : allActiveOffers;
-
-        const isPersonalCategory = ['HEALTH', 'LIFE', 'ACCIDENT'].includes((activeCategory || '').toUpperCase());
-        const ageEligible = (isPersonalCategory && intakeState.coveredAge)
-          ? categoryOffers.filter((o) => {
-              const min = o.minimumEntryAge ?? 18;
-              const max = o.maximumEntryAge ?? 75;
-              return intakeState.coveredAge >= min && intakeState.coveredAge <= max;
-            })
-          : categoryOffers;
-
-        const pool = ageEligible.length > 0 ? ageEligible : categoryOffers;
-
-        let candidateOffers = [];
-        if (recommendedPlanCodes.length > 0) {
-          const byCode = recommendedPlanCodes
-            .map((code) => allActiveOffers.find((o) => o.policyReferenceCode.toLowerCase() === String(code).toLowerCase().trim()))
-            .filter(Boolean);
-          const remaining = pool.filter((o) => !byCode.some((b) => b.policyReferenceCode === o.policyReferenceCode));
-          candidateOffers = [...byCode, ...remaining];
-        } else {
-          candidateOffers = pool;
-        }
-
-        const seenCodes = new Set();
-        recommendedOffers = candidateOffers
-          .filter((o) => {
-            if (!o || seenCodes.has(o.policyReferenceCode)) return false;
-            seenCodes.add(o.policyReferenceCode);
-            return true;
-          })
-          .slice(0, 3);
-      }
-    }
-
-    // Handle profiles and progressive saving
-    const multiProfiles =
-      extractedProfiles.length > 0
-        ? extractedProfiles
-        : Object.keys(extractedProfile).length > 0
-          ? [extractedProfile]
-          : [];
-
-    if (multiProfiles.length > 1) {
-      for (const prof of multiProfiles) {
-        const fullProf = {
-          insuranceType: prof.insuranceType || intakeState.insuranceType || 'HEALTH',
-          ...prof
-        };
-        const profileOffer = prof.selectedPlanName
-          ? allActiveOffers.find((o) =>
-              o.planName.toLowerCase().includes(prof.selectedPlanName.toLowerCase()) ||
-              o.policyReferenceCode.toLowerCase() === prof.selectedPlanName.toLowerCase()
-            ) || selectedPlanOffer
-          : selectedPlanOffer;
-
-        const pState = finalizeIntakeState(fullProf);
-        const res = await saveProgressivePolicyToDb({
-          user,
-          intakeState: pState,
-          selectedOffer: profileOffer,
-          question
-        });
-        if (res.savedPolicy) {
-          savedPolicy = res.savedPolicy;
-          updatedUser = res.updatedUser;
-          dbUpdated = true;
-        }
-      }
-    } else {
-      const dbResult = await saveProgressivePolicyToDb({
-        user,
-        intakeState,
-        selectedOffer: selectedPlanOffer,
-        question
-      });
-      savedPolicy = dbResult.savedPolicy;
-      updatedUser = dbResult.updatedUser;
-      dbUpdated = dbResult.dbUpdated;
-    }
+  if (targetOffer && isEnrollIntent) {
+    selectedOffer = targetOffer;
+    isEnrolled = true;
+  } else if (isEnrollIntent && extractedProfile.selectedPlanName) {
+    const candidateName = extractedProfile.selectedPlanName.toLowerCase().trim();
+    selectedOffer =
+      allActiveOffers.find(
+        (o) =>
+          o.planName.toLowerCase() === candidateName ||
+          candidateName.includes(o.planName.toLowerCase()) ||
+          candidateName.includes(o.policyReferenceCode.toLowerCase()),
+      ) || null;
+    if (selectedOffer) isEnrolled = true;
   }
 
-  // Refresh user policies only if a database write occurred, otherwise reuse allUserPolicies
-  const finalUserPolicies = dbUpdated && user?._id && mongoose.connection.readyState === 1
-    ? await PolicyDetail.find({ userId: user._id }).sort({ createdAt: -1 })
-    : allUserPolicies;
+  if (selectedOffer && isEnrolled) {
+    recommendedOffers = [selectedOffer];
+  } else if (!targetOffer && isReadyForRecommendations) {
+    // INTAKE READY: Provide 6 intelligent, grounded recommendations
+    recommendedOffers = await getIntelligentRecommendations({
+      category: detectedInsuranceType,
+      intakeData: extractedProfile,
+      allActiveOffers,
+      recommendedPlanCodes,
+      targetOffer,
+      limit: 6,
+    });
+  } else {
+    // INTAKE NOT READY: Strict lock on cards
+    recommendedOffers = [];
+  }
+
+  // 8. Progressive Ground Truth Persistence via policyDetailService (Enrollment ONLY)
+  const { savedPolicy, updatedUser, dbUpdated } = await savePolicyIntakeViaService({
+    user,
+    category: detectedInsuranceType,
+    profile: extractedProfile,
+    selectedOffer,
+    isEnrolled,
+  });
+
+  const finalUserPolicies =
+    dbUpdated && user?._id
+      ? await policyDetailService.getUserPolicies(user._id)
+      : allUserPolicies;
 
   return {
     queryId: `rag_${Date.now()}`,
     question,
     answer,
-    citedClauses,
-    confidence,
-    suggestedFollowUps,
-    intakeState,
     recommendedOffers,
     savedPolicy,
-    updatedUser,
     userPolicies: finalUserPolicies,
-    dbUpdated,
-    model,
-    isCached: false,
+    updatedUser,
+    confidence,
     durationMs,
-    createdAt: new Date().toISOString()
+    createdAt: new Date().toISOString(),
   };
 };

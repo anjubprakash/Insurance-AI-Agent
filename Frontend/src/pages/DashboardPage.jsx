@@ -18,9 +18,13 @@ export default function DashboardPage() {
       return 'home';
     }
   });
+  const [chatInitialContext, setChatInitialContext] = useState(null);
 
-  const handleNavigate = (tab) => {
+  const handleNavigate = (tab, contextPayload = null) => {
     setActiveTab(tab);
+    if (tab === 'chat') {
+      setChatInitialContext(contextPayload || { forceNewChat: true });
+    }
     try {
       localStorage.setItem('insurance_portal_active_tab', tab);
     } catch {}
@@ -61,7 +65,10 @@ export default function DashboardPage() {
         )}
 
         {activeTab === 'chat' && (
-          <AiChatPage />
+          <AiChatPage
+            initialContext={chatInitialContext}
+            onClearInitialContext={() => setChatInitialContext(null)}
+          />
         )}
 
         {isStaff && activeTab === 'documents' && (

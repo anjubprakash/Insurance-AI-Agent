@@ -3,7 +3,7 @@ import { createRequire } from 'module';
 import { PolicyOffer } from '../models/policyOffer.model.js';
 import { PolicyDocument } from '../models/policyDocument.model.js';
 import { getEmbeddingModel } from './aiProvider.service.js';
-import { upsertPoints, deletePointsByIds, deleteVectorsByOfferId } from './qdrant.service.js';
+import { upsertRuleVectors, deletePointsByIds, deleteVectorsByOfferId } from './qdrant.service.js';
 import { ApiError } from '../utils/apiError.js';
 
 // Use createRequire for CommonJS packages in Node.js ESM modules
@@ -281,7 +281,7 @@ class PolicyOfferService {
     // 3. Batch upsert all vector points into Qdrant (non-blocking if Qdrant is offline)
     if (pointsToUpsert.length > 0) {
       try {
-        await upsertPoints(pointsToUpsert);
+        await upsertRuleVectors(pointsToUpsert);
         console.log(`✅ Successfully indexed ${pointsToUpsert.length} policy offers in Qdrant for document ${parentDocument._id}`);
       } catch (qErr) {
         console.warn(`⚠️ Qdrant offline notice (vectors stored in MongoDB): ${qErr.message}`);
@@ -342,7 +342,7 @@ class PolicyOfferService {
       offer.qdrantPointId = pointId;
       await offer.save();
 
-      await upsertPoints([
+      await upsertRuleVectors([
         {
           id: pointId,
           vector,
@@ -387,7 +387,7 @@ class PolicyOfferService {
     const query = {};
 
     if (parentDocumentId) query.parentDocumentId = parentDocumentId;
-    if (policyCategory && policyCategory !== 'ALL') query.policyCategory = policyCategory;
+    if (policyCategory) query.policyCategory = policyCategory;
     if (insurer) query.insurer = { $regex: insurer, $options: 'i' };
     if (status) query.status = status;
 

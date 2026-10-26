@@ -145,14 +145,16 @@ export default function EditPolicyOfferModal({ offer, onClose, onUpdated }) {
                 onChange={(e) => setFormData({ ...formData, policyCategory: e.target.value })}
                 className="w-full px-3.5 py-2.5 bg-slate-950 border border-slate-800 rounded-xl text-xs text-white focus:outline-none focus:ring-2 focus:ring-sky-500"
               >
-                <option value="HEALTH">Health & Medical</option>
                 <option value="AUTO">Motor & Auto</option>
+                <option value="HEALTH">Health & Medical</option>
                 <option value="HOME">Home & Property</option>
                 <option value="LIFE">Life & Annuity</option>
-                <option value="ACCIDENT">Accident</option>
+                <option value="COMMERCIAL">Commercial Business</option>
+                <option value="ACCIDENT">Personal Accident</option>
                 <option value="AGRICULTURE">Agriculture & Crop</option>
-                <option value="COMMERCIAL">Commercial & Liability</option>
-                <option value="GENERAL">General Guidelines</option>
+                <option value="TRAVEL">Travel</option>
+                <option value="LIABILITY">Liability (D&O / E&O)</option>
+                <option value="GENERAL">General Insurance</option>
               </select>
             </div>
 

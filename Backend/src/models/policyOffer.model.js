@@ -56,7 +56,7 @@ const policyOfferSchema = new mongoose.Schema(
       index: true
     },
 
-    // Policy Domain Category (auto-detected from spreadsheet or assigned)
+    // Policy Domain Category (Strictly 10 Enterprise Domains)
     policyCategory: {
       type: String,
       enum: [
@@ -69,8 +69,7 @@ const policyOfferSchema = new mongoose.Schema(
         'AGRICULTURE',
         'TRAVEL',
         'LIABILITY',
-        'GENERAL',
-        'OTHER'
+        'GENERAL'
       ],
       default: 'GENERAL',
       index: true

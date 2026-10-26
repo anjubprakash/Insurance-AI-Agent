@@ -83,8 +83,6 @@ export const upsertRuleVectors = async (points) => {
   return sanitizedPoints.length;
 };
 
-// Alias export for general use
-export const upsertPoints = upsertRuleVectors;
 
 // Semantic vector search directly in Qdrant
 export const searchRuleVectors = async (queryVector, limit = 5, filter = null) => {

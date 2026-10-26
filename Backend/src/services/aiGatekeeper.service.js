@@ -71,7 +71,7 @@ Your task is to inspect the multi-point sample extracted across the uploaded doc
 Respond strictly in valid JSON format with no additional text:
 {
   "isValidInsuranceDocument": true or false,
-  "policyType": "AUTO" or "HEALTH" or "HOME" or "LIFE" or "COMMERCIAL" or "GENERAL",
+  "policyType": "AUTO" | "HEALTH" | "HOME" | "LIFE" | "COMMERCIAL" | "ACCIDENT" | "AGRICULTURE" | "TRAVEL" | "LIABILITY" | "GENERAL",
   "confidenceScore": 0.0 to 1.0,
   "reasoning": "A concise, clear 1-2 sentence explanation of why this document is accepted or rejected."
 }`;
@@ -111,7 +111,7 @@ export const evaluateInsuranceDomainDensity = (text = '') => {
     if (lower.includes(term)) matches++;
   }
 
-  // Detect likely policy category based on term frequency
+  // Detect likely policy category based on term frequency across 10 domains
   let detectedType = 'GENERAL';
   if (lower.includes('health') || lower.includes('medical') || lower.includes('inpatient') || lower.includes('hospital')) {
     detectedType = 'HEALTH';
@@ -121,8 +121,16 @@ export const evaluateInsuranceDomainDensity = (text = '') => {
     detectedType = 'HOME';
   } else if (lower.includes('life') || lower.includes('annuity') || lower.includes('critical illness')) {
     detectedType = 'LIFE';
-  } else if (lower.includes('commercial') || lower.includes('business liability') || lower.includes('public liability')) {
+  } else if (lower.includes('commercial') || lower.includes('business liability')) {
     detectedType = 'COMMERCIAL';
+  } else if (lower.includes('accident') || lower.includes('disability')) {
+    detectedType = 'ACCIDENT';
+  } else if (lower.includes('crop') || lower.includes('agriculture') || lower.includes('farm')) {
+    detectedType = 'AGRICULTURE';
+  } else if (lower.includes('travel') || lower.includes('flight') || lower.includes('trip')) {
+    detectedType = 'TRAVEL';
+  } else if (lower.includes('directors') || lower.includes('liability') || lower.includes('indemnity')) {
+    detectedType = 'LIABILITY';
   }
 
   return {

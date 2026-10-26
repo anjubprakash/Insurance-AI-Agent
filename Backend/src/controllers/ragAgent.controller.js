@@ -49,30 +49,3 @@ export const searchPolicyClauses = asyncHandler(async (req, res) => {
   return ApiResponse.success(res, results, 'Matching policy clauses retrieved');
 });
 
-/**
- * 3. Retrieve Operational Cache Metrics
- * GET /api/agent/cache/metrics
- */
-export const getCacheMetrics = asyncHandler(async (req, res) => {
-  return ApiResponse.success(
-    res,
-    {
-      activeEntries: 0,
-      status: 'DISABLED',
-      message: 'RAM caching disabled: Data retrieved directly via MongoDB and Vector Search.'
-    },
-    'Prompt cache metrics'
-  );
-});
-
-/**
- * 4. Invalidate Cache (No-op since RAM cache is removed)
- * POST /api/agent/cache/clear
- */
-export const clearPromptCache = asyncHandler(async (req, res) => {
-  return ApiResponse.success(
-    res,
-    { clearedCount: 0, message: 'RAM caching disabled: Data retrieved directly via MongoDB and Vector Search.' },
-    'Prompt cache cleared'
-  );
-});

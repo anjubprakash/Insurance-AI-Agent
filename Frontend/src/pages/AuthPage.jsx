@@ -5,9 +5,6 @@ import {
   Lock,
   Mail,
   User as UserIcon,
-  Phone,
-  FileText,
-  Briefcase,
   AlertCircle,
   CheckCircle2,
   ArrowRight
@@ -27,11 +24,7 @@ export default function AuthPage() {
   const [signupForm, setSignupForm] = useState({
     name: '',
     email: '',
-    password: '',
-    role: 'POLICYHOLDER',
-    department: 'Motor Claims & Underwriting',
-    policyNumber: '',
-    phone: ''
+    password: ''
   });
 
   const [errorMsg, setErrorMsg] = useState('');
@@ -61,14 +54,7 @@ export default function AuthPage() {
         name: signupForm.name,
         email: signupForm.email,
         password: signupForm.password,
-        role: signupForm.role,
-        phone: signupForm.phone,
-        department:
-          signupForm.role !== 'POLICYHOLDER' ? signupForm.department : undefined,
-        policyNumber:
-          signupForm.role === 'POLICYHOLDER' && signupForm.policyNumber
-            ? signupForm.policyNumber
-            : undefined
+        role: 'POLICYHOLDER'
       };
 
       await signup(payload);
@@ -83,11 +69,7 @@ export default function AuthPage() {
       setSignupForm({
         name: '',
         email: '',
-        password: '',
-        role: 'POLICYHOLDER',
-        department: 'Motor Claims & Underwriting',
-        policyNumber: '',
-        phone: ''
+        password: ''
       });
     } catch (err) {
       setErrorMsg(err.message || 'Signup failed. Please try again.');
@@ -280,93 +262,6 @@ export default function AuthPage() {
                       setSignupForm({ ...signupForm, password: e.target.value })
                     }
                     placeholder="Minimum 8 characters"
-                    className="block w-full pl-10 pr-3 py-2 text-xs bg-slate-950 border border-slate-800 rounded-lg text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-sky-500 focus:border-transparent transition-all"
-                  />
-                </div>
-              </div>
-
-              {/* Role Selector */}
-              <div>
-                <label className="block text-xs font-medium text-slate-300 mb-1">
-                  Account Role
-                </label>
-                <select
-                  value={signupForm.role}
-                  onChange={(e) =>
-                    setSignupForm({ ...signupForm, role: e.target.value })
-                  }
-                  className="block w-full px-3 py-2 text-xs bg-slate-950 border border-slate-800 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-sky-500 focus:border-transparent transition-all"
-                >
-                  <option value="POLICYHOLDER">Policyholder (Customer)</option>
-                  <option value="EMPLOYEE">Insurance Staff / Adjuster</option>
-                  <option value="COMPANY_ADMIN">Company Administrator</option>
-                </select>
-              </div>
-
-              {/* Role-Specific Field: Policy Number or Department */}
-              {signupForm.role === 'POLICYHOLDER' ? (
-                <div>
-                  <label className="block text-xs font-medium text-slate-300 mb-1">
-                    Policy Number (Optional)
-                  </label>
-                  <div className="relative rounded-lg">
-                    <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-slate-500">
-                      <FileText className="w-4 h-4" />
-                    </div>
-                    <input
-                      type="text"
-                      value={signupForm.policyNumber}
-                      onChange={(e) =>
-                        setSignupForm({
-                          ...signupForm,
-                          policyNumber: e.target.value
-                        })
-                      }
-                      placeholder="e.g. POL-AUTO-2026-9041"
-                      className="block w-full pl-10 pr-3 py-2 text-xs bg-slate-950 border border-slate-800 rounded-lg text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-sky-500 focus:border-transparent transition-all"
-                    />
-                  </div>
-                </div>
-              ) : (
-                <div>
-                  <label className="block text-xs font-medium text-slate-300 mb-1">
-                    Department
-                  </label>
-                  <div className="relative rounded-lg">
-                    <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-slate-500">
-                      <Briefcase className="w-4 h-4" />
-                    </div>
-                    <input
-                      type="text"
-                      value={signupForm.department}
-                      onChange={(e) =>
-                        setSignupForm({
-                          ...signupForm,
-                          department: e.target.value
-                        })
-                      }
-                      placeholder="e.g. Claims Investigation"
-                      className="block w-full pl-10 pr-3 py-2 text-xs bg-slate-950 border border-slate-800 rounded-lg text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-sky-500 focus:border-transparent transition-all"
-                    />
-                  </div>
-                </div>
-              )}
-
-              <div>
-                <label className="block text-xs font-medium text-slate-300 mb-1">
-                  Phone (Optional)
-                </label>
-                <div className="relative rounded-lg">
-                  <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-slate-500">
-                    <Phone className="w-4 h-4" />
-                  </div>
-                  <input
-                    type="text"
-                    value={signupForm.phone}
-                    onChange={(e) =>
-                      setSignupForm({ ...signupForm, phone: e.target.value })
-                    }
-                    placeholder="+1 (555) 000-0000"
                     className="block w-full pl-10 pr-3 py-2 text-xs bg-slate-950 border border-slate-800 rounded-lg text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-sky-500 focus:border-transparent transition-all"
                   />
                 </div>

@@ -23,6 +23,7 @@ import { queryAgentApi, listPolicyOffersApi, deletePolicyOfferApi } from '../api
 import { useAuth } from '../context/AuthContext.jsx';
 import DeleteConfirmModal from '../components/DeleteConfirmModal.jsx';
 import { isPlanFavorite, togglePlanFavorite } from '../utils/favorites.js';
+import ChatMessageRenderer from '../components/ChatMessageRenderer.jsx';
 
 const CATEGORY_THEME_MAP = {
   HEALTH: {
@@ -49,6 +50,12 @@ const CATEGORY_THEME_MAP = {
     borderColor: 'border-purple-500/30',
     badgeColor: 'bg-purple-500/15 text-purple-300 border-purple-500/30'
   },
+  COMMERCIAL: {
+    label: 'Commercial Business',
+    icon: Briefcase,
+    borderColor: 'border-indigo-500/30',
+    badgeColor: 'bg-indigo-500/15 text-indigo-300 border-indigo-500/30'
+  },
   ACCIDENT: {
     label: 'Personal Accident',
     icon: Shield,
@@ -58,14 +65,26 @@ const CATEGORY_THEME_MAP = {
   AGRICULTURE: {
     label: 'Agriculture Cover',
     icon: Shield,
-    borderColor: 'border-teal-500/30',
-    badgeColor: 'bg-teal-500/15 text-teal-300 border-teal-500/30'
+    borderColor: 'border-emerald-500/30',
+    badgeColor: 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30'
   },
-  COMMERCIAL: {
-    label: 'Commercial',
+  TRAVEL: {
+    label: 'Travel Insurance',
+    icon: Shield,
+    borderColor: 'border-cyan-500/30',
+    badgeColor: 'bg-cyan-500/15 text-cyan-300 border-cyan-500/30'
+  },
+  LIABILITY: {
+    label: 'Liability & D&O',
     icon: Briefcase,
-    borderColor: 'border-indigo-500/30',
-    badgeColor: 'bg-indigo-500/15 text-indigo-300 border-indigo-500/30'
+    borderColor: 'border-rose-500/30',
+    badgeColor: 'bg-rose-500/15 text-rose-300 border-rose-500/30'
+  },
+  GENERAL: {
+    label: 'General Insurance',
+    icon: Shield,
+    borderColor: 'border-sky-500/30',
+    badgeColor: 'bg-sky-500/15 text-sky-300 border-sky-500/30'
   }
 };
 
@@ -588,7 +607,11 @@ export default function InsurancePage({ user, onNavigateToTab }) {
                   {/* Action Buttons: Glowing "Talk to Agent ⚡" for THIS plan + "Enroll in Plan" */}
                   <div className="pt-4 border-t border-slate-800/80 flex flex-wrap items-center justify-between gap-3">
                     <button
-                      onClick={() => handleOpenPlanChat(offer)}
+                      onClick={() =>
+                        onNavigateToTab
+                          ? onNavigateToTab('chat', { targetOffer: offer, forceNewChat: true })
+                          : handleOpenPlanChat(offer)
+                      }
                       className="relative inline-flex items-center justify-center space-x-2 px-4 py-2.5 rounded-xl font-black text-xs text-slate-950 bg-gradient-to-r from-amber-400 via-amber-500 to-yellow-400 shadow-[0_0_20px_rgba(245,158,11,0.7)] hover:shadow-[0_0_30px_rgba(245,158,11,1)] hover:scale-105 active:scale-95 transition-all duration-300 border border-yellow-300/60 cursor-pointer"
                       title={`Ask Advisor about ${offer.planName}`}
                     >
@@ -704,7 +727,11 @@ export default function InsurancePage({ user, onNavigateToTab }) {
                         </span>
                       )}
                     </div>
-                    <div>{msg.text}</div>
+                    {msg.sender === 'user' ? (
+                      <div className="whitespace-pre-wrap">{msg.text}</div>
+                    ) : (
+                      <ChatMessageRenderer content={msg.text} />
+                    )}
                   </div>
                 </div>
               ))}

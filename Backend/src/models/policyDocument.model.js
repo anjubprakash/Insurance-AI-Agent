@@ -64,8 +64,20 @@ const policyDocumentSchema = new mongoose.Schema(
     },
     policyType: {
       type: String,
-      enum: ['AUTO', 'HEALTH', 'HOME', 'LIFE', 'COMMERCIAL', 'GENERAL', 'MULTIPLE'],
-      default: 'AUTO'
+      enum: [
+        'AUTO',
+        'HEALTH',
+        'HOME',
+        'LIFE',
+        'COMMERCIAL',
+        'ACCIDENT',
+        'AGRICULTURE',
+        'TRAVEL',
+        'LIABILITY',
+        'GENERAL',
+        'MULTIPLE'
+      ],
+      default: 'GENERAL'
     },
     lineOfBusiness: {
       type: String,
