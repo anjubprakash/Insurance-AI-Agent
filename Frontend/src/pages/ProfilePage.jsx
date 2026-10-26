@@ -81,23 +81,49 @@ export default function ProfilePage({ user: propUser, onNavigateToTab }) {
   const [isSavingKyc, setIsSavingKyc] = useState(false);
 
   // Personal Profile Form state
-  const [personalForm, setPersonalForm] = useState({
+  const [personalForm, setPersonalForm] = useState(() => ({
     name: effectiveUser?.name || '',
     email: effectiveUser?.email || '',
     phone: effectiveUser?.phone || '',
     dateOfBirth: effectiveUser?.dateOfBirth || '',
-    age: effectiveUser?.age || '',
+    age: effectiveUser?.age ?? '',
     gender: effectiveUser?.gender || 'PREFER_NOT_TO_SAY',
     city: effectiveUser?.city || '',
     pincode: effectiveUser?.pincode || '',
     preferredLanguage: effectiveUser?.preferredLanguage || 'English'
-  });
+  }));
+
+  const [initialPersonalData, setInitialPersonalData] = useState(() =>
+    JSON.stringify({
+      name: effectiveUser?.name || '',
+      email: effectiveUser?.email || '',
+      phone: effectiveUser?.phone || '',
+      dateOfBirth: effectiveUser?.dateOfBirth || '',
+      age: effectiveUser?.age ?? '',
+      gender: effectiveUser?.gender || 'PREFER_NOT_TO_SAY',
+      city: effectiveUser?.city || '',
+      pincode: effectiveUser?.pincode || '',
+      preferredLanguage: effectiveUser?.preferredLanguage || 'English'
+    })
+  );
 
   // Selected Policy Form state (for inspecting and editing an enrolled policy)
   const [activePolicyForm, setActivePolicyForm] = useState(null);
   const [initialPolicyData, setInitialPolicyData] = useState(null);
   const [isSavingPolicy, setIsSavingPolicy] = useState(false);
   const [isDeletingPolicy, setIsDeletingPolicy] = useState(false);
+
+  // Check if personal profile form has unsaved modifications
+  const hasPersonalChanges = Boolean(
+    initialPersonalData &&
+    JSON.stringify(personalForm) !== initialPersonalData
+  );
+
+  // Phone number validation: if provided, must be strictly 10 digits
+  const isPhoneValid = !personalForm.phone || personalForm.phone.length === 10;
+
+  // Personal form save eligibility
+  const canSavePersonal = hasPersonalChanges && isPhoneValid && !isSavingUser;
 
   const hasPolicyChanges = Boolean(
     activePolicyForm &&
@@ -119,6 +145,32 @@ export default function ProfilePage({ user: propUser, onNavigateToTab }) {
   };
 
   /**
+   * Automatically calculates age when Date of Birth calendar picker is updated
+   */
+  const handleDateOfBirthChange = (dobStr) => {
+    let calculatedAge = personalForm.age;
+    if (dobStr) {
+      const birthDate = new Date(dobStr);
+      const today = new Date();
+      if (!isNaN(birthDate.getTime())) {
+        let age = today.getFullYear() - birthDate.getFullYear();
+        const m = today.getMonth() - birthDate.getMonth();
+        if (m < 0 || (m === 0 && today.getDate() < birthDate.getDate())) {
+          age--;
+        }
+        if (age >= 0 && age < 120) {
+          calculatedAge = age;
+        }
+      }
+    }
+    setPersonalForm((prev) => ({
+      ...prev,
+      dateOfBirth: dobStr,
+      age: calculatedAge
+    }));
+  };
+
+  /**
    * Fetches latest user identity and policies from separate endpoints
    */
   const loadProfileAndPolicies = async () => {
@@ -130,17 +182,19 @@ export default function ProfilePage({ user: propUser, onNavigateToTab }) {
       if (freshUser) {
         setUserProfile(freshUser);
         updateUserSession(freshUser);
-        setPersonalForm({
+        const cleanPersonal = {
           name: freshUser.name || '',
           email: freshUser.email || '',
           phone: freshUser.phone || '',
           dateOfBirth: freshUser.dateOfBirth || '',
-          age: freshUser.age || '',
+          age: freshUser.age ?? '',
           gender: freshUser.gender || 'PREFER_NOT_TO_SAY',
           city: freshUser.city || '',
           pincode: freshUser.pincode || '',
           preferredLanguage: freshUser.preferredLanguage || 'English'
-        });
+        };
+        setPersonalForm(cleanPersonal);
+        setInitialPersonalData(JSON.stringify(cleanPersonal));
         setKycForm({
           consentDataStore: freshUser.consentDataStore !== false,
           idProofType: freshUser.idProofType || 'PENDING_AT_PURCHASE',
@@ -730,7 +784,7 @@ export default function ProfilePage({ user: propUser, onNavigateToTab }) {
                   ) : (
                     <>
                       <Check className="w-3.5 h-3.5" />
-                      <span>Save Profile Changes</span>
+                      <span>Save</span>
                     </>
                   )}
                 </button>
@@ -801,7 +855,6 @@ export default function ProfilePage({ user: propUser, onNavigateToTab }) {
                     <option value="PREFER_NOT_TO_SAY">Prefer not to say</option>
                     <option value="MALE">Male</option>
                     <option value="FEMALE">Female</option>
-                    <option value="NON_BINARY">Non-Binary</option>
                     <option value="OTHER">Other</option>
                   </select>
                 </div>
@@ -826,22 +879,6 @@ export default function ProfilePage({ user: propUser, onNavigateToTab }) {
                     placeholder="e.g. 60601"
                     className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-white placeholder-slate-600 focus:outline-none focus:border-sky-500 transition-all"
                   />
-                </div>
-
-                <div>
-                  <label className="block text-slate-400 font-semibold mb-1.5">Preferred Language</label>
-                  <select
-                    value={personalForm.preferredLanguage}
-                    onChange={(e) => setPersonalForm((p) => ({ ...p, preferredLanguage: e.target.value }))}
-                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-white focus:outline-none focus:border-sky-500 transition-all"
-                  >
-                    <option value="English">English</option>
-                    <option value="Spanish">Spanish</option>
-                    <option value="Hindi">Hindi</option>
-                    <option value="French">French</option>
-                    <option value="German">German</option>
-                    <option value="Mandarin">Mandarin</option>
-                  </select>
                 </div>
               </div>
 
